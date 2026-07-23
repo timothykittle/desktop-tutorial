@@ -52,6 +52,7 @@ def run_onpage_audit(pages: dict, broken_links: dict, keywords: list,
     titles, descriptions = {}, {}
     inbound_links = Counter()
     page_summaries = []
+    keyword_stats = {}  # keyword -> [per-page placement stats]
 
     for url, page in ok_pages.items():
         for link, _ in page.internal_links:
@@ -153,7 +154,7 @@ def run_onpage_audit(pages: dict, broken_links: dict, keywords: list,
         else:
             result.add(PASSED, "Content Quality", f"Word count OK ({word_count}).", url)
 
-        # ---------------- Keyword usage ----------------
+        # ---------------- Keyword usage (per-page stats) ----------------
         if keywords:
             text_lower = text.lower()
             title_lower = title.lower()
@@ -163,34 +164,21 @@ def run_onpage_audit(pages: dict, broken_links: dict, keywords: list,
                 if not kw_l:
                     continue
                 occurrences = text_lower.count(kw_l)
-                in_title = kw_l in title_lower
-                in_h1 = kw_l in h1_lower
-                if page.depth == 0:  # judge keyword placement on the start page
-                    if not in_title:
-                        result.add(WARNING, "Keyword Usage",
-                                   f"Keyword \"{kw}\" not found in the title tag.", url,
-                                   fix=f"Work \"{kw}\" naturally into the title, "
-                                       f"ideally near the front.")
-                    if not in_h1:
-                        result.add(NOTICE, "Keyword Usage",
-                                   f"Keyword \"{kw}\" not found in the H1.", url,
-                                   fix=f"Include \"{kw}\" (or a close variant) in the H1.")
-                    if occurrences == 0:
-                        result.add(WARNING, "Keyword Usage",
-                                   f"Keyword \"{kw}\" does not appear in body content.", url,
-                                   fix=f"Mention \"{kw}\" naturally in the first 100 words "
-                                       f"and a few times through the copy. Do not stuff.")
-                    elif word_count and occurrences / word_count > 0.03:
-                        result.add(WARNING, "Keyword Usage",
-                                   f"Possible keyword stuffing: \"{kw}\" appears "
-                                   f"{occurrences} times ({occurrences / word_count:.1%} "
-                                   f"density).", url,
-                                   fix="Keep density under ~2-3%; use synonyms and "
-                                       "related terms instead.")
-                    else:
-                        result.add(PASSED, "Keyword Usage",
-                                   f"Keyword \"{kw}\" used {occurrences}x - looks natural.",
-                                   url)
+                keyword_stats.setdefault(kw, []).append({
+                    "url": url,
+                    "in_title": kw_l in title_lower,
+                    "in_h1": kw_l in h1_lower,
+                    "occurrences": occurrences,
+                    "is_homepage": page.depth == 0,
+                })
+                # Stuffing check applies to every page, not just the homepage
+                if word_count and occurrences / word_count > 0.03:
+                    result.add(WARNING, "Keyword Usage",
+                               f"Possible keyword stuffing: \"{kw}\" appears "
+                               f"{occurrences} times ({occurrences / word_count:.1%} "
+                               f"density).", url,
+                               fix="Keep density under ~2-3%; use synonyms and "
+                                   "related terms instead.")
 
         # ---------------- URL structure ----------------
         parsed = urlparse(url)
@@ -334,6 +322,65 @@ def run_onpage_audit(pages: dict, broken_links: dict, keywords: list,
                            "and AI answer engines render rich previews.")
 
         page_summaries.append(summary)
+
+    # ---------------- Site-wide keyword coverage ----------------
+    # For each target keyword: does ANY page target it (title/H1)? Is the
+    # homepage optimized for it? Do too many pages compete for it?
+    coverage = {}
+    for kw, stats in keyword_stats.items():
+        title_pages = [s["url"] for s in stats if s["in_title"]]
+        h1_pages = [s["url"] for s in stats if s["in_h1"]]
+        body_pages = [s["url"] for s in stats if s["occurrences"] > 0]
+        home = next((s for s in stats if s["is_homepage"]), None)
+        coverage[kw] = {
+            "pages_with_keyword_in_title": title_pages,
+            "pages_with_keyword_in_h1": h1_pages,
+            "pages_mentioning_in_body": len(body_pages),
+            "total_pages_checked": len(stats),
+        }
+        if not title_pages and not h1_pages:
+            result.add(CRITICAL, "Keyword Usage",
+                       f"No page on the site targets \"{kw}\" in a title tag or H1 "
+                       f"(checked {len(stats)} pages).",
+                       fix=f"Pick (or create) one page as the primary target for "
+                           f"\"{kw}\" and put the keyword in its title, H1, first "
+                           f"paragraph, and URL slug.")
+        elif not title_pages:
+            result.add(WARNING, "Keyword Usage",
+                       f"\"{kw}\" appears in H1s ({len(h1_pages)} page(s)) but in "
+                       f"no title tag - titles carry more ranking weight.",
+                       fix=f"Add \"{kw}\" to the title tag of its primary page.")
+        elif len(title_pages) > 3:
+            result.add(NOTICE, "Keyword Usage",
+                       f"\"{kw}\" appears in the titles of {len(title_pages)} pages "
+                       f"- keyword cannibalization risk.",
+                       fix="Pick one primary page per keyword; differentiate the "
+                           "other titles (add service, location, or intent "
+                           "modifiers) and internally link them to the primary page.")
+        else:
+            result.add(PASSED, "Keyword Usage",
+                       f"\"{kw}\" is targeted by {len(title_pages)} page(s), "
+                       f"e.g. {title_pages[0]}")
+        if home:
+            if not home["in_title"]:
+                result.add(WARNING, "Keyword Usage",
+                           f"Keyword \"{kw}\" not found in the homepage title tag.",
+                           home["url"],
+                           fix=f"Work \"{kw}\" naturally into the homepage title, "
+                               f"ideally near the front.")
+            if not home["in_h1"]:
+                result.add(NOTICE, "Keyword Usage",
+                           f"Keyword \"{kw}\" not found in the homepage H1.",
+                           home["url"],
+                           fix=f"Include \"{kw}\" (or a close variant) in the H1.")
+            if home["occurrences"] == 0:
+                result.add(WARNING, "Keyword Usage",
+                           f"Keyword \"{kw}\" does not appear in homepage body "
+                           f"content.", home["url"],
+                           fix=f"Mention \"{kw}\" naturally in the first 100 words "
+                               f"and a few times through the copy. Do not stuff.")
+    if coverage:
+        result.data["keyword_coverage"] = coverage
 
     # ---------------- Cross-page checks ----------------
     for title, urls in titles.items():

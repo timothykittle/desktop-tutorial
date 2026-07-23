@@ -178,6 +178,22 @@ def render_html(url: str, sections: list, overall: int, meta: dict) -> str:
             for name, link in s.data["research_links"].items():
                 parts.append(f"<li><a href='{e(link)}' target='_blank'>{e(name)}</a></li>")
             parts.append("</ul></details>")
+        if "keyword_coverage" in s.data:
+            parts.append("<details open><summary>Keyword coverage</summary>"
+                         "<table><tr><th>Keyword</th><th>In titles</th>"
+                         "<th>In H1s</th><th>Pages mentioning it</th>"
+                         "<th>Primary page (first title match)</th></tr>")
+            for kw, cov in s.data["keyword_coverage"].items():
+                title_pages = cov["pages_with_keyword_in_title"]
+                primary = title_pages[0] if title_pages else "-"
+                parts.append(
+                    f"<tr><td><b>{e(kw)}</b></td>"
+                    f"<td>{len(title_pages)}</td>"
+                    f"<td>{len(cov['pages_with_keyword_in_h1'])}</td>"
+                    f"<td>{cov['pages_mentioning_in_body']} of "
+                    f"{cov['total_pages_checked']}</td>"
+                    f"<td class='url'>{e(primary)}</td></tr>")
+            parts.append("</table></details>")
         if "ai_access" in s.data and s.data["ai_access"]:
             parts.append("<details open><summary>Crawler access matrix "
                          "(robots.txt)</summary><table><tr><th>Crawler</th>"

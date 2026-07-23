@@ -28,6 +28,11 @@ SOCIAL_PLATFORMS = {
     "pinterest.com": "Pinterest",
 }
 
+# URL paths that indicate location/service-area landing pages
+LOCATION_PATH_RE = re.compile(
+    r"/(?:locations?|areas?[-_]?served|service[-_]?areas?|areas?|cities|towns|"
+    r"neighborhoods|regions|coverage)(?:/(?P<child>[^/]+))?/?$", re.I)
+
 CITATION_SITES = [
     "Google Business Profile (business.google.com)",
     "Bing Places (bingplaces.com)",
@@ -141,6 +146,42 @@ def run_offpage_audit(start_url: str, pages: dict, manual: dict = None,
         result.add(NOTICE, "Local Citations",
                    "Verify citations are consistent across the major directories.",
                    fix="Check NAP consistency on: " + "; ".join(CITATION_SITES) + ".")
+
+        # ---- Location / service-area landing pages ----
+        hub_pages, location_pages = [], []
+        for u in ok_pages:
+            m = LOCATION_PATH_RE.search(urlparse(u).path)
+            if m:
+                if m.group("child"):
+                    location_pages.append(u)
+                else:
+                    hub_pages.append(u)
+        result.data["location_pages"] = location_pages
+        if location_pages:
+            result.add(PASSED, "Local Landing Pages",
+                       f"{len(location_pages)} individual location page(s) found "
+                       f"(e.g. {location_pages[0]}).")
+        elif hub_pages:
+            result.add(WARNING, "Local Landing Pages",
+                       f"An areas-served/locations page exists ({hub_pages[0]}) but "
+                       f"NO individual city/town pages were found among the "
+                       f"{len(ok_pages)} crawled pages.",
+                       fix="Create a dedicated landing page for each priority town/"
+                           "city you serve (e.g. /areas-served/huntington-ny) with "
+                           "unique content: local intro, services offered there, "
+                           "town-specific testimonials, driving directions/map, and "
+                           "LocalBusiness or Service schema with areaServed. Link "
+                           "each from the areas-served hub and the footer. One "
+                           "generic list page cannot rank in every town.")
+        else:
+            result.add(WARNING, "Local Landing Pages",
+                       f"No location or service-area pages found among the "
+                       f"{len(ok_pages)} crawled pages.",
+                       fix="Local rankings outside your home town need dedicated "
+                           "pages: create /areas-served/ with a child page per "
+                           "priority city (unique content, local testimonials, "
+                           "LocalBusiness/Service schema with areaServed, embedded "
+                           "map), and link them sitewide.")
 
     # ---------------- User-supplied backlink metrics ----------------
     def _to_int(value):

@@ -51,8 +51,10 @@ Upload the edited files in `fixes/` to your web host's site root.
 
 **On-page** — title tags & meta descriptions (length, missing, duplicates),
 heading structure (H1 count, level skips), content depth vs search intent
-(thin-content detection), keyword usage in title/H1/body with stuffing
-detection, URL structure (length, underscores, case, depth, parameters),
+(thin-content detection), **site-wide keyword coverage** (which pages target
+each keyword in titles/H1s, keywords no page targets, cannibalization when
+too many pages compete, homepage placement, stuffing detection on every
+page), URL structure (length, underscores, case, depth, parameters),
 image optimization (alt text, file names, formats, dimensions, lazy
 loading), internal linking (broken links, orphan pages, generic anchors),
 canonical tags, mobile viewport, schema markup (JSON-LD validation + types),
@@ -67,7 +69,9 @@ crawl errors.
 
 **Off-page** — social profiles linked from the site, Organization /
 LocalBusiness schema & `sameAs` brand entity, NAP (name/address/phone) for
-local SEO, citation checklist, scored backlink/referring-domain/Domain
+local SEO, **local landing pages** (detects whether individual city/town
+pages exist, or only a generic areas-served page), citation checklist,
+scored backlink/referring-domain/Domain
 Authority assessment (you paste the numbers from free tools), links-per-domain
 spam ratio, one-click research links (GSC links report, brand-mention Google
 searches, Moz, Ahrefs), and a prioritized off-page action plan.
