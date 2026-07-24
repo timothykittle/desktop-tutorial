@@ -33,6 +33,11 @@ if errorlevel 1 (
     exit /b 1
 )
 echo.
+echo  Installing optional extras (drag-and-drop + AI copy)...
+echo  (These are optional - the app still works if they fail.)
+%PYCMD% -m pip install tkinterdnd2 anthropic
+echo.
+echo.
 echo  Setup complete! Double-click run_windows.bat to launch SEO Audit Pro.
 echo.
 pause

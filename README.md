@@ -10,16 +10,95 @@ access** (GPTBot, OAI-SearchBot, ChatGPT-User, ClaudeBot, PerplexityBot,
 Google-Extended, CCBot and more) so your content stays eligible for AI
 Overviews, ChatGPT Search, Perplexity, and Claude answers (AEO/GEO).
 
+It doesn't just *find* problems — it **fixes and builds** them: upload your
+site's files (or point it at a live domain), and it produces a repaired,
+ready-to-upload copy with corrected titles, meta descriptions, headings,
+image alt text, schema, viewport, robots.txt, and llms.txt. A built-in **AI
+assistant** interviews you about your business and generates local **location
+pages** (say "Suffolk County" and get a landing page for every town), FAQ
+pages, a blog plan, and Google Business Profile / AI-integration guides.
+
 ---
 
 ## Windows setup (one time)
 
 1. Install Python from <https://www.python.org/downloads/> —
    **tick "Add python.exe to PATH"** during install.
-2. Double-click **`setup_windows.bat`** (installs two small libraries).
+2. Double-click **`setup_windows.bat`** (installs the required libraries).
 3. Double-click **`run_windows.bat`** to launch the app.
 
-No other installs needed — the GUI uses Tkinter, which ships with Python.
+The GUI uses Tkinter, which ships with Python. Two optional extras add
+polish: `tkinterdnd2` (drag-and-drop upload) and `anthropic` (lets the AI
+assistant use Claude for higher-quality generated copy). `setup_windows.bat`
+installs them automatically.
+
+### Make a standalone .exe (no Python needed on other PCs)
+
+Double-click **`build_windows_exe.bat`** (or run `python build_exe.py`). It
+uses PyInstaller to produce **`dist\SEO Audit Pro.exe`** — a single file you
+can copy to any Windows PC and double-click; the end user does **not** need
+Python installed.
+
+## The two-panel window
+
+- **Left** — your **source** (type a live URL, *or* drag-and-drop / browse a
+  website folder or files to upload), the **AI assistant** chat, and a live
+  activity log.
+- **Right** — a stack of square buttons: Google Search Console, Crawl,
+  robots.txt, llms.txt, then one button per on-page and off-page check, a
+  **COMPLETE AUDIT** button, and the **build** tools (repaired site package,
+  location pages, FAQ, blog plan, guides).
+
+## Upload & repair (build for hosting)
+
+1. Drag your website folder onto the drop zone (or **Choose Folder…**). The
+   app loads every HTML page plus CSS/JS/image/CSV/MD/TXT inventory and flags
+   broken local links.
+2. Tell the **AI assistant** your business name, services, area, phone, etc.
+   (it asks one question at a time).
+3. Click **Build repaired site package**. You get a `site_package/repaired-site/`
+   folder — the same file structure, with every fixable on-page issue
+   corrected, plus `robots.txt`, `llms.txt`, `sitemap.xml`, and a
+   `repair_log.csv` listing every change (before/after). Upload it to your host.
+
+The repairer is conservative: it **adds** what's missing and fixes what's
+unambiguously broken (titles, metas, one-H1 rule, image alt text, viewport,
+canonical, Open Graph, homepage schema) and never deletes your visible content.
+
+## Security audit & hardening (for your own site)
+
+Click **Security audit** for a defensive check of the site you're auditing:
+HTTPS + HTTP→HTTPS redirect, TLS certificate expiry, missing security headers
+(HSTS, CSP, X-Content-Type-Options, clickjacking, Referrer-Policy,
+Permissions-Policy), insecure cookies (Secure/HttpOnly/SameSite), mixed
+content, insecure login forms, third-party script / missing-SRI exposure,
+publicly exposed files (`.git`, `.env`, backups), directory listing, missing
+`security.txt`, and WordPress user enumeration. Every finding comes with a
+fix. **Build security hardening files** then writes ready-to-upload
+`.htaccess` / nginx / IIS header configs plus a `security.txt` template.
+
+These are passive, best-practice checks for a site you own — no exploitation.
+
+## Debug panel
+
+The **Debug** buttons help when something doesn't work:
+
+- **Run diagnostics** — checks Python, required and optional libraries, every
+  app module, folder write access, network/proxy, and DNS, then saves
+  `diagnostics.txt`. Run this first if the app misbehaves.
+- **Verbose logging** — shows full tracebacks in the activity log.
+- **Save log to file** / **Copy last error** — grab the log or the last full
+  traceback to attach when asking for help.
+
+## Build location pages (local SEO)
+
+Click **Build location pages** (or tell the assistant your service area). Say
+**"Suffolk County"** → a landing page for all ~44 towns. **"NYC and Long
+Island"** → the five boroughs plus every LI town. **"New York"** alone → it
+asks you to narrow down. Each page is a complete, unique HTML5 document
+(varied intros so pages aren't duplicates) with LocalBusiness schema,
+`areaServed`, NAP, a click-to-call CTA, and a review placeholder — plus an
+`areas-served/` hub and a paste-ready footer link block.
 
 ## Using the app
 

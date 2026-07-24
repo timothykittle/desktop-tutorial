@@ -4,6 +4,7 @@ Respects robots.txt for our own user agent, stays on the start domain,
 and collects everything the checkers need (HTML, headers, timing, links).
 """
 
+import re
 import time
 import urllib.robotparser
 from dataclasses import dataclass, field
@@ -61,13 +62,35 @@ def same_domain(url: str, root_netloc: str) -> bool:
     return netloc == root or netloc == f"www.{root}" or f"www.{netloc}" == root
 
 
+def _sitemap_locs(xml_text: str) -> list:
+    """Pull <loc> values out of sitemap XML without a parser dependency."""
+    return [m.strip() for m in re.findall(r"<loc>\s*([^<]+?)\s*</loc>", xml_text)]
+
+
+def registrable_domain(netloc: str) -> str:
+    """Naive registrable domain: strip "www." and keep the last two labels.
+
+    Good enough for .com/.net/etc without a public-suffix dependency.
+    """
+    host = netloc.lower().split(":")[0]
+    if host.startswith("www."):
+        host = host[4:]
+    labels = host.split(".")
+    return ".".join(labels[-2:]) if len(labels) >= 2 else host
+
+
 class SiteCrawler:
     def __init__(self, start_url: str, max_pages: int = 50, delay: float = 0.3,
-                 timeout: int = 15, log=None, stop_flag=None):
+                 timeout: int = 15, log=None, stop_flag=None,
+                 include_subdomains: bool = False,
+                 seed_from_sitemap: bool = False):
         if not start_url.startswith(("http://", "https://")):
             start_url = "https://" + start_url
         self.start_url = start_url
         self.root_netloc = urlparse(start_url).netloc
+        self.include_subdomains = include_subdomains
+        self.seed_from_sitemap = seed_from_sitemap
+        self.root_domain = registrable_domain(self.root_netloc)
         self.max_pages = max_pages
         self.delay = delay
         self.timeout = timeout
@@ -81,6 +104,7 @@ class SiteCrawler:
         })
         self.pages: dict[str, PageData] = {}
         self.broken_links: dict[str, list] = {}  # broken url -> [pages linking to it]
+        self.robots_sitemaps: list = []  # sitemap URLs found in robots.txt
         self.robots = self._load_robots()
 
     def _load_robots(self):
@@ -90,11 +114,20 @@ class SiteCrawler:
             resp = self.session.get(robots_url, timeout=self.timeout)
             if resp.status_code == 200:
                 rp.parse(resp.text.splitlines())
+                for line in resp.text.splitlines():
+                    if line.lower().startswith("sitemap:"):
+                        self.robots_sitemaps.append(line.split(":", 1)[1].strip())
             else:
                 rp.parse([])
         except requests.RequestException:
             rp.parse([])
         return rp
+
+    def _is_internal(self, url: str) -> bool:
+        """Same-domain check, optionally accepting sibling subdomains."""
+        if self.include_subdomains:
+            return registrable_domain(urlparse(url).netloc) == self.root_domain
+        return same_domain(url, self.root_netloc)
 
     def _allowed(self, url: str) -> bool:
         try:
@@ -134,15 +167,67 @@ class SiteCrawler:
             if not absolute.startswith(("http://", "https://")):
                 continue
             anchor = a.get_text(strip=True) or a.find("img", alt=True) and a.find("img")["alt"] or ""
-            if same_domain(absolute, self.root_netloc):
+            if self._is_internal(absolute):
                 page.internal_links.append((normalize_url(absolute), anchor))
             else:
                 page.external_links.append((absolute, anchor))
+
+    def _seed_from_sitemap(self, queue, seen):
+        """Enqueue URLs from the site's sitemap(s). Never fatal."""
+        try:
+            sitemaps = list(self.robots_sitemaps) or [
+                f"{urlparse(self.start_url).scheme}://{self.root_netloc}/sitemap.xml"]
+            locs = []
+            fetched_children = 0
+            for sitemap_url in sitemaps:
+                text = self._fetch_sitemap(sitemap_url)
+                if text is None:
+                    continue
+                if "<sitemapindex" in text:
+                    # Sitemap index: follow child sitemaps one level deep.
+                    for child in _sitemap_locs(text):
+                        if fetched_children >= 5:
+                            break
+                        fetched_children += 1
+                        child_text = self._fetch_sitemap(child)
+                        if child_text is not None:
+                            locs.extend(_sitemap_locs(child_text))
+                else:
+                    locs.extend(_sitemap_locs(text))
+            added = 0
+            for loc in locs:
+                if not loc.startswith(("http://", "https://")):
+                    continue
+                if not self._is_internal(loc):
+                    continue
+                url = normalize_url(loc)
+                if url in seen:
+                    continue
+                seen.add(url)
+                queue.append((url, 1))
+                added += 1
+                if len(seen) >= self.max_pages * 2:
+                    break
+            if added:
+                self.log(f"  Seeded {added} URL(s) from sitemap.")
+        except Exception as exc:
+            self.log(f"  Sitemap seeding skipped: {exc}")
+
+    def _fetch_sitemap(self, url: str):
+        try:
+            resp = self.session.get(url, timeout=self.timeout)
+            if resp.status_code == 200:
+                return resp.text
+        except requests.RequestException:
+            pass
+        return None
 
     def crawl(self) -> dict:
         """Breadth-first crawl from the start URL. Returns {url: PageData}."""
         queue = [(normalize_url(self.start_url), 0)]
         seen = {queue[0][0]}
+        if self.seed_from_sitemap:
+            self._seed_from_sitemap(queue, seen)
         while queue and len(self.pages) < self.max_pages:
             if self.stop_flag():
                 self.log("Crawl stopped by user.")
@@ -160,7 +245,7 @@ class SiteCrawler:
             if page.status_code >= 400 or page.error:
                 continue
             for link, _anchor in page.internal_links:
-                if link not in seen:
+                if link not in seen and self._is_internal(link):
                     seen.add(link)
                     queue.append((link, depth + 1))
             if self.delay:
