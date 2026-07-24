@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+audits/
+site_package/
+settings.json
+business_profile.json
+diagnostics.txt
+dist/
+build/
+*.spec

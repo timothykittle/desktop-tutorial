@@ -1,0 +1,9 @@
+# Core (required)
+requests>=2.31
+beautifulsoup4>=4.12
+
+# Optional - the app runs without these, but they add features:
+#   tkinterdnd2  -> drag-and-drop file/folder upload in the GUI
+#   anthropic    -> AI assistant uses Claude for higher-quality generated copy
+#   pyinstaller  -> build a standalone .exe (see build_exe.py)
+# Install the extras with:  pip install tkinterdnd2 anthropic pyinstaller
