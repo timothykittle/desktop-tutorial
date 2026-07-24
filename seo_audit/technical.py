@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 
 import requests
 
-from .crawler import USER_AGENT
+from .crawler import USER_AGENT, normalize_url
 from .issues import SectionResult, CRITICAL, WARNING, NOTICE, PASSED
 
 # AI crawlers that matter for visibility in AI answers (AI Overviews,
@@ -74,6 +74,34 @@ def _agent_access(rules: dict, agent: str) -> str:
     return "allowed"
 
 
+def _final_origin(start_url: str, pages: dict) -> str:
+    """Best-effort canonical origin after redirects.
+
+    Prefer the final URL of the crawled start page (or the shallowest page),
+    so origin-level checks run against where the site actually served, not the
+    pre-redirect host the user typed. Returns "" if nothing usable is found.
+    """
+    start_norm = normalize_url(start_url)
+    # 1) exact start page, by its post-redirect final_url
+    page = pages.get(start_norm)
+    if page and getattr(page, "final_url", ""):
+        return _origin_of(page.final_url)
+    # 2) otherwise the shallowest OK page that has a final_url
+    candidates = [p for p in pages.values()
+                  if getattr(p, "ok", False) and getattr(p, "final_url", "")]
+    if candidates:
+        shallow = min(candidates, key=lambda p: getattr(p, "depth", 0))
+        return _origin_of(shallow.final_url)
+    return ""
+
+
+def _origin_of(url: str) -> str:
+    p = urlparse(url)
+    if p.scheme and p.netloc:
+        return f"{p.scheme}://{p.netloc}"
+    return ""
+
+
 def run_technical_audit(start_url: str, pages: dict, session=None,
                         log=None, timeout=15) -> SectionResult:
     log = log or (lambda m: None)
@@ -85,6 +113,14 @@ def run_technical_audit(start_url: str, pages: dict, session=None,
         start_url = "https://" + start_url
     parsed = urlparse(start_url)
     scheme, netloc = parsed.scheme, parsed.netloc
+
+    # Base every origin-level check on the FINAL crawled origin, not the URL the
+    # user typed. If the entered URL 301s (apex -> www, http -> https, etc.),
+    # the crawl already followed it; pinning checks to the pre-redirect host
+    # would flag HTTPS/robots/sitemap/canonical against the wrong origin.
+    final_origin = _final_origin(start_url, pages)
+    if final_origin:
+        scheme, netloc = urlparse(final_origin).scheme, urlparse(final_origin).netloc
     origin = f"{scheme}://{netloc}"
 
     # ---------------- HTTPS ----------------

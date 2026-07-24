@@ -105,22 +105,35 @@ class SiteCrawler:
         self.pages: dict[str, PageData] = {}
         self.broken_links: dict[str, list] = {}  # broken url -> [pages linking to it]
         self.robots_sitemaps: list = []  # sitemap URLs found in robots.txt
-        self.robots = self._load_robots()
+        # Per-host robots.txt parsers. A crawl can span hosts (apex <-> www
+        # redirects, or sibling subdomains when include_subdomains is set), and
+        # each host has its own robots.txt - so fetch and cache one per host
+        # rather than applying the start host's rules everywhere.
+        self._robots_cache: dict[str, urllib.robotparser.RobotFileParser] = {}
+        self.robots = self._load_robots(
+            f"{urlparse(self.start_url).scheme}://{self.root_netloc}",
+            collect_sitemaps=True)
 
-    def _load_robots(self):
+    def _load_robots(self, origin, collect_sitemaps=False):
+        """Fetch + parse robots.txt for one origin (scheme://host). Cached by
+        host. `collect_sitemaps` records Sitemap: lines into robots_sitemaps."""
+        host = urlparse(origin).netloc.lower()
+        if host in self._robots_cache:
+            return self._robots_cache[host]
         rp = urllib.robotparser.RobotFileParser()
-        robots_url = f"{urlparse(self.start_url).scheme}://{self.root_netloc}/robots.txt"
         try:
-            resp = self.session.get(robots_url, timeout=self.timeout)
+            resp = self.session.get(f"{origin}/robots.txt", timeout=self.timeout)
             if resp.status_code == 200:
                 rp.parse(resp.text.splitlines())
-                for line in resp.text.splitlines():
-                    if line.lower().startswith("sitemap:"):
-                        self.robots_sitemaps.append(line.split(":", 1)[1].strip())
+                if collect_sitemaps:
+                    for line in resp.text.splitlines():
+                        if line.lower().startswith("sitemap:"):
+                            self.robots_sitemaps.append(line.split(":", 1)[1].strip())
             else:
                 rp.parse([])
         except requests.RequestException:
             rp.parse([])
+        self._robots_cache[host] = rp
         return rp
 
     def _is_internal(self, url: str) -> bool:
@@ -130,8 +143,12 @@ class SiteCrawler:
         return same_domain(url, self.root_netloc)
 
     def _allowed(self, url: str) -> bool:
+        """Check robots.txt for the URL's OWN host (lazily fetched + cached),
+        not the host the crawl happened to start from."""
         try:
-            return self.robots.can_fetch(USER_AGENT, url)
+            parsed = urlparse(url)
+            rp = self._load_robots(f"{parsed.scheme}://{parsed.netloc}")
+            return rp.can_fetch(USER_AGENT, url)
         except Exception:
             return True
 
