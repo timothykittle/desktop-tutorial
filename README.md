@@ -56,10 +56,26 @@ Python installed.
    broken local links.
 2. Tell the **AI assistant** your business name, services, area, phone, etc.
    (it asks one question at a time).
-3. Click **Build repaired site package**. You get a `site_package/repaired-site/`
+3. Click **Build & verify repairs**. You get a `site_package/repaired-site/`
    folder — the same file structure, with every fixable on-page issue
    corrected, plus `robots.txt`, `llms.txt`, `sitemap.xml`, and a
    `repair_log.csv` listing every change (before/after). Upload it to your host.
+
+## Needs Repair vs Repaired (verified)
+
+The **Results** tab has two sections. When you run an audit, every issue lands
+under **⚠ Needs Repair**. When you click **Build & verify repairs**, the app
+rebuilds the site *and then re-audits the rebuilt files* — anything the
+re-check confirms is fixed moves down into **✓ Repaired (verified)**, and only
+what's genuinely still outstanding stays under Needs Repair. Items the on-page
+repairer can't touch (backlinks, page speed, off-page) are kept under Needs
+Repair and tagged **MANUAL**. The same split is saved as
+`repaired-site/repair-status.html`.
+
+> "Repaired" always means *re-checked and confirmed*, not just "attempted" —
+> so an item only leaves Needs Repair once it actually passes. Set a base URL
+> (or audit a live URL) so the re-check can map the rebuilt files back to their
+> pages; without one, items stay under Needs Repair until you verify manually.
 
 The repairer is conservative: it **adds** what's missing and fixes what's
 unambiguously broken (titles, metas, one-H1 rule, image alt text, viewport,

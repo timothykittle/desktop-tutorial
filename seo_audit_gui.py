@@ -43,6 +43,7 @@ from seo_audit.report import make_output_dir, save_reports
 # New v2 modules (built alongside this GUI)
 from seo_audit.localsite import load_local_site
 from seo_audit.diagnostics import run_diagnostics
+from seo_audit.verify import build_and_verify, render_split_html, split_results
 from seo_audit import repair as repairmod
 from seo_audit import locations as locmod
 
@@ -242,17 +243,93 @@ class SeoAuditApp:
         # placed dynamically when an action is offered
 
     def _build_log(self, parent):
-        box = ttk.LabelFrame(parent, text=" Activity log ", padding=6)
-        box.grid(row=3, column=0, sticky="nsew", pady=(8, 0))
-        box.rowconfigure(0, weight=1)
-        box.columnconfigure(0, weight=1)
-        self.log_text = tk.Text(box, height=8, wrap="word", state="disabled",
+        self.nb = ttk.Notebook(parent)
+        self.nb.grid(row=3, column=0, sticky="nsew", pady=(8, 0))
+
+        # --- Tab 1: Results (Needs Repair / Repaired) ---
+        results = ttk.Frame(self.nb, padding=4)
+        self.nb.add(results, text="Results")
+        results.rowconfigure(1, weight=1)
+        results.rowconfigure(3, weight=1)
+        results.columnconfigure(0, weight=1)
+        self.results_summary = tk.StringVar(
+            value="Run an audit to list what needs repair; build & verify to "
+                  "move fixed items to Repaired.")
+        ttk.Label(results, textvariable=self.results_summary,
+                  font=("Segoe UI", 8), foreground="#5f6368").grid(
+            row=0, column=0, sticky="w", pady=(0, 2))
+
+        ttk.Label(results, text="⚠  NEEDS REPAIR",
+                  foreground="#d93025", font=("Segoe UI", 9, "bold")).grid(
+            row=0, column=0, sticky="e")
+        self.tree_needs = self._results_tree(results, 1)
+        ttk.Label(results, text="✓  REPAIRED (verified)",
+                  foreground="#188038", font=("Segoe UI", 9, "bold")).grid(
+            row=2, column=0, sticky="w", pady=(6, 0))
+        self.tree_repaired = self._results_tree(results, 3)
+
+        # --- Tab 2: Activity log ---
+        logf = ttk.Frame(self.nb)
+        self.nb.add(logf, text="Activity log")
+        logf.rowconfigure(0, weight=1)
+        logf.columnconfigure(0, weight=1)
+        self.log_text = tk.Text(logf, height=8, wrap="word", state="disabled",
                                 font=("Consolas", 9), background=NAVY,
                                 foreground="#d7e3f4")
         self.log_text.grid(row=0, column=0, sticky="nsew")
-        sc = ttk.Scrollbar(box, command=self.log_text.yview)
+        sc = ttk.Scrollbar(logf, command=self.log_text.yview)
         sc.grid(row=0, column=1, sticky="ns")
         self.log_text.configure(yscrollcommand=sc.set)
+
+    def _results_tree(self, parent, row):
+        frame = ttk.Frame(parent)
+        frame.grid(row=row, column=0, sticky="nsew")
+        frame.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+        cols = ("sev", "cat", "item", "page")
+        tree = ttk.Treeview(frame, columns=cols, show="headings", height=5)
+        for c, w, t in [("sev", 70, "Status"), ("cat", 130, "Category"),
+                        ("item", 320, "Item"), ("page", 160, "Page")]:
+            tree.heading(c, text=t)
+            tree.column(c, width=w, anchor="w")
+        tree.tag_configure("CRITICAL", foreground="#d93025")
+        tree.tag_configure("WARNING", foreground="#ea8600")
+        tree.tag_configure("NOTICE", foreground="#1a73e8")
+        tree.tag_configure("MANUAL", foreground="#8430ce")
+        tree.tag_configure("REPAIRED", foreground="#188038")
+        tree.grid(row=0, column=0, sticky="nsew")
+        vs = ttk.Scrollbar(frame, command=tree.yview)
+        vs.grid(row=0, column=1, sticky="ns")
+        tree.configure(yscrollcommand=vs.set)
+        return tree
+
+    def _populate_results(self, split):
+        """Fill the Needs Repair / Repaired trees from a verify split dict."""
+        self.tree_needs.delete(*self.tree_needs.get_children())
+        self.tree_repaired.delete(*self.tree_repaired.get_children())
+        for it in split.get("needs_repair", []):
+            manual = it.get("status") == "needs_repair_manual"
+            tag = "MANUAL" if manual else it["severity"]
+            label = "MANUAL" if manual else it["severity"]
+            self.tree_needs.insert("", "end", tags=(tag,), values=(
+                label, it["category"], it["message"][:120],
+                urlparse(it["url"]).path or it["url"]))
+        for it in split.get("repaired", []):
+            self.tree_repaired.insert("", "end", tags=("REPAIRED",), values=(
+                "FIXED ✓", it["category"], it["message"][:120],
+                urlparse(it["url"]).path or it["url"]))
+        s = split.get("summary", {})
+        verified = "verified against the rebuilt files" if s.get("verified") \
+            else "not yet verified"
+        self.results_summary.set(
+            f"{s.get('needs_repair', 0)} need repair, "
+            f"{s.get('repaired', 0)} repaired ({verified}).")
+        self.nb.select(0)  # show the Results tab
+
+    def _results_from_sections(self, sections):
+        """Turn a plain audit (no repair yet) into an all-needs-repair split."""
+        from seo_audit.verify import split_results
+        return split_results(sections, None)
 
     def _build_actions(self, parent):
         # Scrollable canvas so the button stack always fits
@@ -317,7 +394,7 @@ class SeoAuditApp:
         sq("✅  COMPLETE AUDIT (all checks)", self.act_complete_audit, big=True)
 
         header("Build & repair (for hosting)")
-        sq("\U0001F6E0️  Build repaired site package", self.act_build_package, big=True)
+        sq("\U0001F6E0️  Build & verify repairs", self.act_build_package, big=True)
         sq("On-page fixes only", lambda: self.act_build_package(onpage_only=True))
         sq("\U0001F4CD  Build location pages", self.act_location_pages)
         sq("❓  Generate FAQ page", self.act_faq)
@@ -522,6 +599,8 @@ class SeoAuditApp:
                     self._on_done(payload)
                 elif kind == "busy":
                     self._busy(payload)
+                elif kind == "results":
+                    self._populate_results(payload)
                 elif kind == "chat":
                     self._assistant_say(payload, "act")
         except queue.Empty:
@@ -568,6 +647,14 @@ class SeoAuditApp:
         if result and result.get("paths", {}).get("html"):
             self.last_result = result
             self.open_report_btn.configure(state="normal")
+            # Populate "Needs Repair" from the audit's issues (nothing verified
+            # as repaired until you run Build & verify repairs).
+            sections = result.get("sections")
+            if sections:
+                try:
+                    self._populate_results(split_results(sections, None))
+                except Exception:
+                    pass
             overall = result.get("overall")
             msg = f"Audit complete - overall score {overall}/100." if overall is not None \
                 else "Done."
@@ -900,22 +987,40 @@ class SeoAuditApp:
                 return
             base = ctx["url"] or ctx["base_url"] or ""
             out = os.path.join(PACKAGE_DIR, "repaired-site")
-            self.log("Building repaired site package...")
-            res = repairmod.repair_site(pages, out, ctx["business"],
-                                        keywords=ctx["keywords"], categories=cats,
-                                        base_url=base, log=self.log)
-            self.log(f"Repaired {res['pages_repaired']} page(s), "
-                     f"{res['changes']} change(s), {res['suggestions']} suggestion(s).")
-            self.msg_queue.put(("status", f"Site package saved to {out}"))
+            self.log("Building repaired site package (with verification)...")
+            # Audit -> repair -> re-audit the repaired files -> split results.
+            outcome = build_and_verify(pages, out, ctx["business"],
+                                       keywords=ctx["keywords"], categories=cats,
+                                       base_url=base, log=self.log)
+            res, split = outcome["result"], outcome["split"]
+            self.msg_queue.put(("results", split))
+            # Two-section HTML report (Needs Repair / Repaired)
+            status_html = os.path.join(res.get("output_dir", out),
+                                       "repair-status.html")
+            try:
+                render_split_html(base or "your site", split, status_html)
+            except Exception:
+                status_html = ""
+            self.last_result = {"paths": {"html": status_html},
+                                "output_dir": res.get("output_dir", out)} \
+                if status_html else self.last_result
+            s = split["summary"]
+            verified = "" if outcome["reaudited"] else \
+                "\n(Note: set a base URL to enable automatic verification.)"
+            self.msg_queue.put(("status", f"{s['repaired']} repaired, "
+                                          f"{s['needs_repair']} still need attention."))
             if messagebox.askyesno(
                     APP_NAME,
-                    f"Repaired site package built!\n\n"
-                    f"Pages repaired: {res['pages_repaired']}\n"
-                    f"Total fixes: {res['changes']}\n"
-                    f"Suggestions logged: {res['suggestions']}\n\n"
-                    f"Saved to:\n{out}\n\nOpen the folder?"):
-                self._open_folder(out)
-        self._run_bg(job, "Building repaired site package...")
+                    f"Repaired site package built and re-checked!\n\n"
+                    f"✓ Repaired (verified): {s['repaired']}\n"
+                    f"⚠ Still needs repair: {s['needs_repair']}\n\n"
+                    f"Saved to:\n{res.get('output_dir', out)}{verified}\n\n"
+                    f"Open the Needs Repair / Repaired report?"):
+                if status_html:
+                    webbrowser.open("file://" + os.path.abspath(status_html))
+                else:
+                    self._open_folder(res.get("output_dir", out))
+        self._run_bg(job, "Building & verifying repairs...")
 
     def act_location_pages(self, locations=None):
         ctx = self._snapshot()
