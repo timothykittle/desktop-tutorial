@@ -44,6 +44,8 @@ from seo_audit.report import make_output_dir, save_reports
 from seo_audit.localsite import load_local_site
 from seo_audit.diagnostics import run_diagnostics
 from seo_audit.verify import build_and_verify, render_split_html, split_results
+from seo_audit.backup import make_backup
+from seo_audit import gitsource
 from seo_audit import repair as repairmod
 from seo_audit import locations as locmod
 
@@ -62,8 +64,22 @@ from seo_audit.assistant import (
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_PATH = os.path.join(APP_DIR, "settings.json")
 PROFILE_PATH = os.path.join(APP_DIR, "business_profile.json")
-AUDITS_DIR = os.path.join(APP_DIR, "audits")
-PACKAGE_DIR = os.path.join(APP_DIR, "site_package")
+
+# Output folders live under a configurable save root (default: the app folder).
+# set_save_root() re-points all three when the user picks a location.
+SAVE_ROOT = APP_DIR
+AUDITS_DIR = os.path.join(SAVE_ROOT, "audits")
+PACKAGE_DIR = os.path.join(SAVE_ROOT, "site_package")
+BACKUP_DIR = os.path.join(SAVE_ROOT, "backups")
+
+
+def set_save_root(root):
+    """Re-point audits/site_package/backups at a new base folder."""
+    global SAVE_ROOT, AUDITS_DIR, PACKAGE_DIR, BACKUP_DIR
+    SAVE_ROOT = root
+    AUDITS_DIR = os.path.join(root, "audits")
+    PACKAGE_DIR = os.path.join(root, "site_package")
+    BACKUP_DIR = os.path.join(root, "backups")
 
 # Palette
 NAVY = "#0b2545"
@@ -84,12 +100,14 @@ class SeoAuditApp:
         self.last_result = None
         self.last_error = ""
 
-        # Source state: either a URL, or a loaded local site
+        # Source state: a URL, a loaded local upload, or a cloned GitHub repo.
         self.source_mode = tk.StringVar(value="url")   # "url" | "local"
-        self.local_paths = []          # uploaded files/folder
-        self.local_pages = None        # loaded PageData dict
+        self.local_paths = []          # uploaded files/folder (in-memory session)
+        self.local_pages = None        # loaded PageData dict (discarded each session)
         self.local_broken = {}
         self.local_inventory = {}
+        self.source_root_paths = []    # original folder/files to back up
+        self.clone_dir = ""            # temp GitHub clone, cleaned on new session
 
         self.assistant = AssistantEngine(PROFILE_PATH)
         self._build_ui()
@@ -201,21 +219,52 @@ class SeoAuditApp:
                    command=self._pick_folder).pack(side="left")
         ttk.Button(btns, text="Choose Files…",
                    command=self._pick_files).pack(side="left", padx=4)
-        ttk.Label(box, text="Site's public base URL (optional, for local upload):").grid(
-            row=5, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        ttk.Button(btns, text="New session (clear)",
+                   command=self.act_new_session).pack(side="left", padx=4)
+
+        # GitHub source
+        gh = ttk.Frame(box)
+        gh.grid(row=5, column=0, columnspan=3, sticky="ew", pady=(6, 0))
+        gh.columnconfigure(1, weight=1)
+        ttk.Label(gh, text="Or load from GitHub:").grid(row=0, column=0, sticky="w")
+        self.gh_url_var = tk.StringVar()
+        ttk.Entry(gh, textvariable=self.gh_url_var).grid(row=0, column=1,
+                                                         sticky="ew", padx=4)
+        ttk.Button(gh, text="Clone & load",
+                   command=self.act_load_github).grid(row=0, column=2)
+        ttk.Label(gh, text="Token (private repos, optional):").grid(
+            row=1, column=0, sticky="w", pady=(2, 0))
+        self.gh_token_var = tk.StringVar()
+        ttk.Entry(gh, textvariable=self.gh_token_var, show="*").grid(
+            row=1, column=1, columnspan=2, sticky="ew", padx=4, pady=(2, 0))
+
+        ttk.Label(box, text="Site's public base URL (recommended for uploads):").grid(
+            row=6, column=0, columnspan=2, sticky="w", pady=(6, 0))
         self.base_url_var = tk.StringVar()
         ttk.Entry(box, textvariable=self.base_url_var, width=28).grid(
-            row=5, column=2, sticky="ew", padx=6, pady=(6, 0))
+            row=6, column=2, sticky="ew", padx=6, pady=(6, 0))
+
+        # Save location
+        save = ttk.Frame(box)
+        save.grid(row=7, column=0, columnspan=3, sticky="ew", pady=(6, 0))
+        save.columnconfigure(1, weight=1)
+        ttk.Label(save, text="Save results to:").grid(row=0, column=0, sticky="w")
+        self.save_root_var = tk.StringVar(value=SAVE_ROOT)
+        ttk.Entry(save, textvariable=self.save_root_var).grid(
+            row=0, column=1, sticky="ew", padx=4)
+        ttk.Button(save, text="Browse…",
+                   command=self._pick_save_root).grid(row=0, column=2)
+
         self.source_summary = tk.StringVar(value="")
         ttk.Label(box, textvariable=self.source_summary, foreground=ACCENT,
-                  font=("Segoe UI", 8)).grid(row=6, column=0, columnspan=3, sticky="w")
+                  font=("Segoe UI", 8)).grid(row=8, column=0, columnspan=3, sticky="w")
 
         # keywords
         ttk.Label(box, text="Target keywords (comma-separated):").grid(
-            row=7, column=0, sticky="w", pady=(6, 0))
+            row=9, column=0, sticky="w", pady=(6, 0))
         self.keywords_var = tk.StringVar()
         ttk.Entry(box, textvariable=self.keywords_var).grid(
-            row=7, column=1, columnspan=2, sticky="ew", padx=6, pady=(6, 0))
+            row=9, column=1, columnspan=2, sticky="ew", padx=6, pady=(6, 0))
 
     def _build_assistant(self, parent):
         box = ttk.LabelFrame(parent, text=" 2. AI Assistant (interviews you & "
@@ -394,8 +443,10 @@ class SeoAuditApp:
         sq("✅  COMPLETE AUDIT (all checks)", self.act_complete_audit, big=True)
 
         header("Build & repair (for hosting)")
+        sq("\U0001F4BE  Back up originals now", self.act_backup)
         sq("\U0001F6E0️  Build & verify repairs", self.act_build_package, big=True)
         sq("On-page fixes only", lambda: self.act_build_package(onpage_only=True))
+        sq("☁️  Save / push to GitHub", self.act_push_github)
         sq("\U0001F4CD  Build location pages", self.act_location_pages)
         sq("❓  Generate FAQ page", self.act_faq)
         sq("✍️  Generate blog plan", self.act_blog)
@@ -467,10 +518,15 @@ class SeoAuditApp:
         if fs:
             self._load_local(list(fs))
 
-    def _load_local(self, paths):
+    def _load_local(self, paths, from_github=False):
+        # A fresh load starts a fresh in-memory session: drop the prior site's
+        # parsed data before reading the new one.
+        if not from_github:
+            self._discard_session(keep_clone=False)
         self.source_mode.set("local")
         self._sync_source()
         self.local_paths = paths
+        self.source_root_paths = list(paths)   # originals we can back up
         base = self.base_url_var.get().strip()
         try:
             if len(paths) == 1 and os.path.isdir(paths[0]):
@@ -485,11 +541,67 @@ class SeoAuditApp:
             self.source_summary.set(
                 f"Loaded {n} HTML page(s), {inv.get('images', 0)} image(s), "
                 f"{inv.get('css', 0)} CSS, {inv.get('js', 0)} JS; "
-                f"{len(self.local_broken)} broken local link(s).")
-            self.log(f"Loaded local site: {n} pages from {paths[0]}")
+                f"{len(self.local_broken)} broken local link(s). "
+                f"(In memory only - discarded when you start a new session.)")
+            self.log(f"Loaded {'GitHub repo' if from_github else 'local site'}: "
+                     f"{n} pages from {paths[0]}")
         except Exception as exc:
             messagebox.showerror(APP_NAME, f"Could not load site: {exc}")
-            self.log(f"ERROR loading local site: {exc}")
+            self.log(f"ERROR loading site: {exc}")
+
+    def _discard_session(self, keep_clone=True):
+        """Drop the in-memory parsed site (kept only for the session)."""
+        self.local_pages = None
+        self.local_broken = {}
+        self.local_inventory = {}
+        self.local_paths = []
+        self.source_root_paths = []
+        if not keep_clone and self.clone_dir:
+            import shutil
+            shutil.rmtree(self.clone_dir, ignore_errors=True)
+            self.clone_dir = ""
+
+    def act_new_session(self):
+        self._discard_session(keep_clone=False)
+        try:
+            self.tree_needs.delete(*self.tree_needs.get_children())
+            self.tree_repaired.delete(*self.tree_repaired.get_children())
+        except Exception:
+            pass
+        self.source_summary.set("Session cleared - loaded site data discarded.")
+        self.log("New session: in-memory site data discarded.")
+
+    def _pick_save_root(self):
+        d = filedialog.askdirectory(title="Choose where to save results & backups")
+        if d:
+            self.save_root_var.set(d)
+            set_save_root(d)
+            self.log(f"Save location set to {d}")
+
+    def act_load_github(self):
+        url = self.gh_url_var.get().strip()
+        token = self.gh_token_var.get().strip()
+        if not url:
+            messagebox.showinfo(APP_NAME, "Paste a GitHub repo URL first.")
+            return
+        # apply save root before we clone under it
+        set_save_root(self.save_root_var.get().strip() or APP_DIR)
+
+        def job():
+            self._discard_session(keep_clone=False)
+            res = gitsource.clone_repo(url, token=token, log=self.log)
+            if not res["ok"]:
+                self.msg_queue.put(("status", "GitHub clone failed - see log."))
+                self.log("GitHub clone failed: " + res["error"])
+                messagebox.showerror(APP_NAME, "Could not load the repo:\n\n"
+                                     + res["error"])
+                return
+            self.clone_dir = res["dir"]
+            # Load on the main thread (Tk-touching) via a callback.
+            self.root.after(0, lambda: self._load_local([res["dir"]],
+                                                        from_github=True))
+            self.msg_queue.put(("status", "GitHub repo cloned and loaded."))
+        self._run_bg(job, f"Cloning {url} ...")
 
     def _current_url(self, required=True):
         url = self.url_var.get().strip()
@@ -672,6 +784,9 @@ class SeoAuditApp:
         url = self.url_var.get().strip()
         if url and not url.startswith(("http://", "https://")):
             url = "https://" + url
+        # Apply the save location (main thread) so the output globals are set
+        # before any worker uses them.
+        set_save_root(self.save_root_var.get().strip() or APP_DIR)
         return {
             "mode": self.source_mode.get(),
             "url": url,
@@ -685,6 +800,8 @@ class SeoAuditApp:
             "claude_key": self.claude_key_var.get().strip(),
             "business": self._business(),
             "offpage_manual": self._offpage_manual(),
+            "source_root_paths": list(self.source_root_paths),
+            "backup_dir": self._site_backup_dir(),
         }
 
     def _ctx_name(self, ctx):
@@ -949,6 +1066,93 @@ class SeoAuditApp:
     def act_sitemap(self):
         self._build_files_only("sitemap.xml")
 
+    # ---- backup + GitHub save ----
+    def _site_name(self):
+        base = self.base_url_var.get().strip() or self.url_var.get().strip()
+        if base:
+            host = urlparse(base if "//" in base else "//" + base).netloc
+            if host:
+                return host.replace(":", "_")
+        if self.source_root_paths:
+            return os.path.basename(str(self.source_root_paths[0]).rstrip("/\\")) \
+                or "site"
+        return "site"
+
+    def _site_backup_dir(self):
+        return os.path.join(BACKUP_DIR, self._site_name())
+
+    def _do_backup(self, ctx, quiet=False):
+        """Back up the loaded originals using paths captured in the ctx
+        snapshot (no Tk access - safe from a worker thread). Returns the
+        result dict or None."""
+        roots = ctx.get("source_root_paths") or []
+        if not roots:
+            if not quiet:
+                self.log("Backup skipped: no uploaded files (a live-URL audit "
+                         "has nothing local to back up).")
+            return None
+        try:
+            return make_backup(roots, ctx["backup_dir"], log=self.log)
+        except Exception as exc:
+            self.log(f"Backup error: {exc}")
+            return None
+
+    def act_backup(self):
+        ctx = self._snapshot()
+        if ctx["mode"] != "local" or not ctx["source_root_paths"]:
+            messagebox.showinfo(APP_NAME, "Upload a folder/files (or load a "
+                                          "GitHub repo) first - there's nothing "
+                                          "local to back up for a live URL.")
+            return
+
+        def job():
+            res = self._do_backup(ctx)
+            if res:
+                msg = (f"Backed up {res['files_copied']} file(s) to "
+                       f"{os.path.basename(res['folder'])}"
+                       + (f" ({len(res['skipped'])} unreadable skipped)"
+                          if res['skipped'] else ""))
+                self.msg_queue.put(("status", msg))
+                if messagebox.askyesno(APP_NAME, msg + f"\n\nLocation:\n"
+                                       f"{res['folder']}\n\nOpen the folder?"):
+                    self._open_folder(os.path.dirname(res['folder']))
+        self._run_bg(job, "Backing up originals...")
+
+    def act_push_github(self):
+        set_save_root(self.save_root_var.get().strip() or APP_DIR)
+        pkg = os.path.join(PACKAGE_DIR, "repaired-site")
+        if not os.path.isdir(pkg):
+            messagebox.showinfo(APP_NAME, "Build the repaired site package first "
+                                          "(Build & verify repairs), then push it.")
+            return
+        if not gitsource.git_available():
+            messagebox.showerror(APP_NAME, "Git isn't installed. Install Git for "
+                                 "Windows from https://git-scm.com/download/win.")
+            return
+        url = self._ask_text("Save to GitHub",
+                             "Target GitHub repo URL to push the repaired site to\n"
+                             "(a new branch is created - your main branch is untouched):")
+        if not url:
+            return
+        token = self.gh_token_var.get().strip()
+        if not messagebox.askyesno(APP_NAME, f"Push the repaired site package to:\n"
+                                   f"{url}\n\nThis creates a NEW branch and does not "
+                                   f"touch your existing branches. Continue?"):
+            return
+
+        def job():
+            self.log(f"Pushing repaired site to {url} ...")
+            res = gitsource.push_folder(pkg, url, token=token, log=self.log)
+            if res["ok"]:
+                self.msg_queue.put(("status", f"Pushed to branch {res['branch']}."))
+                messagebox.showinfo(APP_NAME, f"Pushed the repaired site to a new "
+                                    f"branch:\n\n{res['branch']}\n\nOpen a pull "
+                                    f"request on GitHub to review and merge it.")
+            else:
+                self.log("Push failed: " + res["error"])
+                messagebox.showerror(APP_NAME, "Push failed:\n\n" + res["error"])
+        self._run_bg(job, "Pushing to GitHub...")
+
     def _build_files_only(self, which):
         ctx = self._snapshot()
         if not self._have_source(ctx):
@@ -986,6 +1190,8 @@ class SeoAuditApp:
             if pages is None:
                 return
             base = ctx["url"] or ctx["base_url"] or ""
+            # Safety net: back up the untouched originals BEFORE repairing.
+            self._do_backup(ctx, quiet=True)
             out = os.path.join(PACKAGE_DIR, "repaired-site")
             self.log("Building repaired site package (with verification)...")
             # Audit -> repair -> re-audit the repaired files -> split results.
@@ -1160,6 +1366,11 @@ class SeoAuditApp:
             self.max_pages_var.set(s.get("max_pages", 40))
             self.subdomains_var.set(s.get("subdomains", False))
             self.sitemap_var.set(s.get("sitemap", True))
+            self.gh_url_var.set(s.get("github_url", ""))
+            root = s.get("save_root", "")
+            if root:
+                self.save_root_var.set(root)
+                set_save_root(root)
         except (OSError, json.JSONDecodeError):
             pass
 
@@ -1175,6 +1386,11 @@ class SeoAuditApp:
                     "max_pages": self.max_pages_var.get(),
                     "subdomains": self.subdomains_var.get(),
                     "sitemap": self.sitemap_var.get(),
+                    "github_url": self.gh_url_var.get(),
+                    "save_root": self.save_root_var.get(),
+                    # NB: GitHub token and API keys' secrecy - token is never
+                    # persisted; API keys are (user convenience) - keep
+                    # settings.json out of shared/committed folders.
                 }, fh, indent=2)
         except OSError:
             pass
@@ -1182,6 +1398,8 @@ class SeoAuditApp:
     def on_close(self):
         self._save_settings()
         self.stop_requested = True
+        # Discard the in-memory session and any temp GitHub clone.
+        self._discard_session(keep_clone=False)
         self.root.destroy()
 
 

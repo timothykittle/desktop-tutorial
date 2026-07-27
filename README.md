@@ -81,6 +81,49 @@ The repairer is conservative: it **adds** what's missing and fixes what's
 unambiguously broken (titles, metas, one-H1 rule, image alt text, viewport,
 canonical, Open Graph, homepage schema) and never deletes your visible content.
 
+## Where it reads from & saves to
+
+**Source** — three ways: type a **live URL**, **upload** a folder/files
+(drag-and-drop), or **load from GitHub** (paste a repo URL; add a
+personal-access token for private repos). A GitHub repo is shallow-cloned to a
+temporary folder and loaded like an upload.
+
+**Save location** — the **Save results to** box (with **Browse…**) sets one
+base folder for all output; everything lands under it in `audits/`,
+`site_package/`, and `backups/`. Defaults to the app folder.
+
+**In-memory sessions** — when you upload or clone a site, its parsed content is
+held **in memory only** and discarded when you click **New session (clear)**,
+load a different site, or close the app. Nothing about your site is written to
+disk except the backups and the output you explicitly build.
+
+## Backups (originals are never overwritten)
+
+The repairer always writes to a separate `repaired-site/` folder, so your
+originals are never modified — and on top of that, **before any repair the app
+copies every original file into a backup folder**. You can also click **Back up
+originals now** any time. Backups are byte-for-byte and include files the
+auditor can't parse (gitignored config like `.env`, password-protected
+archives, binaries) — a backup that skipped those wouldn't be a real backup;
+anything genuinely unreadable is listed in a `_BACKUP-NOTES.txt`.
+
+Folders are named exactly as you'd expect, newest work never clobbering older:
+
+```
+backups/<yoursite>/Backup_ORIGINAL_MM-DD-YYYY   <- first ever backup (pristine)
+backups/<yoursite>/Backup_2_MM-DD-YYYY          <- second, third, ...
+backups/<yoursite>/Backup_3_MM-DD-YYYY
+```
+
+## Save / push to GitHub
+
+After building the repaired package, **Save / push to GitHub** commits it to a
+repo you name — on a **new branch** (`seo-audit-pro/repaired-<date>`), never
+force-pushing and never touching your existing branches — so you can open a
+pull request, review the changes, and merge when you're happy. Requires Git
+installed and (for private repos) a personal-access token. The token is used
+only for that push and is never saved to disk or shown in logs.
+
 ## Security audit & hardening (for your own site)
 
 Click **Security audit** for a defensive check of the site you're auditing:
