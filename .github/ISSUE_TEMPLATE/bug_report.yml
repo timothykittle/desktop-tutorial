@@ -1,0 +1,107 @@
+name: "🐛 Bug report"
+description: Something in SEO Audit Pro isn't working as expected.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report! Please fill in as much as you can — the
+        diagnostics report and audit log capture almost everything we need.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe the problem and what you expected instead.
+      placeholder: I clicked "Complete audit" and the app closed without a report...
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Launch the app
+        2. Enter URL / drag folder ...
+        3. Click ...
+        4. See error
+    validations:
+      required: true
+
+  - type: dropdown
+    id: source
+    attributes:
+      label: What source were you auditing?
+      options:
+        - Live URL
+        - Local folder
+        - Uploaded file(s)
+        - GitHub repository
+        - Server log file
+        - Not applicable
+    validations:
+      required: true
+
+  - type: dropdown
+    id: feature
+    attributes:
+      label: Which feature?
+      options:
+        - Complete audit
+        - On-page / Technical / Off-page / PageSpeed check
+        - Security audit
+        - AI visibility — Prompt research
+        - AI visibility — Track visibility
+        - Content creation (FAQ / blog / service pages / metas)
+        - Repair / Verify / Backup
+        - Location pages
+        - GitHub load/save
+        - Other / unsure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: how-run
+    attributes:
+      label: How are you running it?
+      options:
+        - Standalone .exe
+        - From source (python seo_audit_gui.py)
+        - CLI (run_audit_cli.py)
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: OS and version
+      placeholder: Windows 11 / Windows 10 / macOS 14 / Ubuntu 24.04
+    validations:
+      required: true
+
+  - type: input
+    id: python
+    attributes:
+      label: Python version (if running from source)
+      placeholder: "3.11"
+
+  - type: dropdown
+    id: api-key
+    attributes:
+      label: Was an Anthropic API key configured?
+      description: Relevant for content generation and AI-visibility tracking.
+      options:
+        - "No"
+        - "Yes"
+        - Not applicable
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Diagnostics / log output
+      description: >
+        Run **Debug → Run diagnostics** (or turn on Verbose logging) and paste
+        the output here, plus the relevant part of `audit-log.txt`. This is
+        automatically formatted as code — no backticks needed.
+      render: text

@@ -1,0 +1,52 @@
+name: "💡 Feature request"
+description: Suggest a new check, generator, or improvement.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe the need, not just the solution.
+      placeholder: When auditing client sites I can't easily...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      placeholder: Add a button / check / export that...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which area does this touch?
+      options:
+        - New audit check (on-page / technical / off-page)
+        - Security audit
+        - AI visibility (AEO/GEO)
+        - Content creation
+        - Repair / verify
+        - Location pages
+        - Reporting / export formats
+        - GUI / usability
+        - CLI / automation
+        - Packaging / distribution
+        - Documentation / wiki
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      placeholder: Other approaches, existing workarounds, similar tools...
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Mockups, example sites, links, or anything else that helps.

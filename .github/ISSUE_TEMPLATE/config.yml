@@ -1,0 +1,12 @@
+# Require issues to go through one of the forms above.
+blank_issues_enabled: false
+contact_links:
+  - name: 📖 Documentation & wiki
+    url: https://github.com/timothykittle/desktop-tutorial/blob/main/wiki/Home.md
+    about: Getting started, every check explained, troubleshooting, and FAQ.
+  - name: 🛠️ Troubleshooting guide
+    url: https://github.com/timothykittle/desktop-tutorial/blob/main/wiki/Troubleshooting.md
+    about: Run the Debug panel and check common fixes before filing a bug.
+  - name: 💬 Questions & ideas (Discussions)
+    url: https://github.com/timothykittle/desktop-tutorial/discussions
+    about: For open-ended questions and usage help (enable Discussions to use).
