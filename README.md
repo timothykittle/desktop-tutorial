@@ -10,6 +10,11 @@ access** (GPTBot, OAI-SearchBot, ChatGPT-User, ClaudeBot, PerplexityBot,
 Google-Extended, CCBot and more) so your content stays eligible for AI
 Overviews, ChatGPT Search, Perplexity, and Claude answers (AEO/GEO).
 
+> 📖 **Full documentation is in the [wiki](wiki/Home.md)** — getting started,
+> auditing any site, every check explained, AI-visibility tracking, content
+> creation, repair/verify, CLI, and troubleshooting. To publish it as the
+> GitHub Wiki tab, see [Publishing This Wiki](wiki/Publishing-This-Wiki.md).
+
 It doesn't just *find* problems — it **fixes and builds** them: upload your
 site's files (or point it at a live domain), and it produces a repaired,
 ready-to-upload copy with corrected titles, meta descriptions, headings,
