@@ -282,3 +282,8 @@ python run_audit_cli.py --log-file access.log
 - Only audit sites you own or have permission to audit.
 - Backlink counts require third-party indexes; this tool scores the numbers
   you paste from free sources rather than pretending to have its own index.
+
+## License
+
+Released under the [MIT License](LICENSE) — free to use, modify, and
+distribute, including commercially, with attribution.
