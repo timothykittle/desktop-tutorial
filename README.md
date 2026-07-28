@@ -10,6 +10,11 @@ access** (GPTBot, OAI-SearchBot, ChatGPT-User, ClaudeBot, PerplexityBot,
 Google-Extended, CCBot and more) so your content stays eligible for AI
 Overviews, ChatGPT Search, Perplexity, and Claude answers (AEO/GEO).
 
+> 📖 **Full documentation is in the [wiki](wiki/Home.md)** — getting started,
+> auditing any site, every check explained, AI-visibility tracking, content
+> creation, repair/verify, CLI, and troubleshooting. To publish it as the
+> GitHub Wiki tab, see [Publishing This Wiki](wiki/Publishing-This-Wiki.md).
+
 It doesn't just *find* problems — it **fixes and builds** them: upload your
 site's files (or point it at a live domain), and it produces a repaired,
 ready-to-upload copy with corrected titles, meta descriptions, headings,
@@ -56,16 +61,100 @@ Python installed.
    broken local links.
 2. Tell the **AI assistant** your business name, services, area, phone, etc.
    (it asks one question at a time).
-3. Click **Build repaired site package**. You get a `site_package/repaired-site/`
+3. Click **Build & verify repairs**. You get a `site_package/repaired-site/`
    folder — the same file structure, with every fixable on-page issue
    corrected, plus `robots.txt`, `llms.txt`, `sitemap.xml`, and a
    `repair_log.csv` listing every change (before/after). Upload it to your host.
+
+## Needs Repair vs Repaired (verified)
+
+The **Results** tab has two sections. When you run an audit, every issue lands
+under **⚠ Needs Repair**. When you click **Build & verify repairs**, the app
+rebuilds the site *and then re-audits the rebuilt files* — anything the
+re-check confirms is fixed moves down into **✓ Repaired (verified)**, and only
+what's genuinely still outstanding stays under Needs Repair. Items the on-page
+repairer can't touch (backlinks, page speed, off-page) are kept under Needs
+Repair and tagged **MANUAL**. The same split is saved as
+`repaired-site/repair-status.html`.
+
+> "Repaired" always means *re-checked and confirmed*, not just "attempted" —
+> so an item only leaves Needs Repair once it actually passes. Set a base URL
+> (or audit a live URL) so the re-check can map the rebuilt files back to their
+> pages; without one, items stay under Needs Repair until you verify manually.
 
 The repairer is conservative: it **adds** what's missing and fixes what's
 unambiguously broken (titles, metas, one-H1 rule, image alt text, viewport,
 canonical, Open Graph, homepage schema) and never deletes your visible content.
 
-## Security audit & hardening (for your own site)
+## Where it reads from & saves to
+
+**Source** — three ways: type a **live URL**, **upload** a folder/files
+(drag-and-drop), or **load from GitHub** (paste a repo URL; add a
+personal-access token for private repos). A GitHub repo is shallow-cloned to a
+temporary folder and loaded like an upload.
+
+**Save location** — the **Save results to** box (with **Browse…**) sets one
+base folder for all output; everything lands under it in `audits/`,
+`site_package/`, and `backups/`. Defaults to the app folder.
+
+**In-memory sessions** — when you upload or clone a site, its parsed content is
+held **in memory only** and discarded when you click **New session (clear)**,
+load a different site, or close the app. Nothing about your site is written to
+disk except the backups and the output you explicitly build.
+
+## Backups (originals are never overwritten)
+
+The repairer always writes to a separate `repaired-site/` folder, so your
+originals are never modified — and on top of that, **before any repair the app
+copies every original file into a backup folder**. You can also click **Back up
+originals now** any time. Backups are byte-for-byte and include files the
+auditor can't parse (gitignored config like `.env`, password-protected
+archives, binaries) — a backup that skipped those wouldn't be a real backup;
+anything genuinely unreadable is listed in a `_BACKUP-NOTES.txt`.
+
+Folders are named exactly as you'd expect, newest work never clobbering older:
+
+```
+backups/<yoursite>/Backup_ORIGINAL_MM-DD-YYYY   <- first ever backup (pristine)
+backups/<yoursite>/Backup_2_MM-DD-YYYY          <- second, third, ...
+backups/<yoursite>/Backup_3_MM-DD-YYYY
+```
+
+## Save / push to GitHub
+
+After building the repaired package, **Save / push to GitHub** commits it to a
+repo you name — on a **new branch** (`seo-audit-pro/repaired-<date>`), never
+force-pushing and never touching your existing branches — so you can open a
+pull request, review the changes, and merge when you're happy. Requires Git
+installed and (for private repos) a personal-access token. The token is used
+only for that push and is never saved to disk or shown in logs.
+
+## AI visibility (AEO/GEO): prompt research & tracking
+
+- **Prompt research** — generates the real questions people ask AI assistants
+  (ChatGPT, Perplexity, Google AI Overviews) that your business should be the
+  answer to, built from your services × areas × buyer intent and grouped into
+  clusters (informational, commercial/near-me, local/urgent, comparison,
+  brand). Saved as `.md`, `.csv`, and `.json`. Templated offline; sharper
+  phrasing with a Claude API key.
+- **Track AI visibility** — for that prompt list, checks whether your brand /
+  domain appears in AI answers. With a Claude API key it runs each prompt
+  through Claude with **live web search** and records *cited* (in the answer's
+  sources), *mentioned* (in the answer text), or *absent*. Without a key it
+  opens browser searches for you to check and log. Every run is **timestamped**
+  (`tracking-history.csv` + per-run JSON) and reports the change since last
+  time, so you can watch your AI visibility climb.
+
+## Content creation
+
+Beyond FAQ pages and the 12-topic blog plan, the **Content creation** section
+generates: **full blog-post drafts** (700–1000 words, snippet-friendly intro,
+FAQ, CTA), **service landing pages** (one polished HTML page per service with
+schema-ready structure and NAP), and **bulk meta descriptions** (a ≤155-char
+description for every crawled/uploaded page, exported to CSV). All work offline
+from templates and use Claude for the actual writing when a key is set.
+
+## Security audit & hardening (site you own or are authorized to test)
 
 Click **Security audit** for a defensive check of the site you're auditing:
 HTTPS + HTTP→HTTPS redirect, TLS certificate expiry, missing security headers
@@ -193,3 +282,8 @@ python run_audit_cli.py --log-file access.log
 - Only audit sites you own or have permission to audit.
 - Backlink counts require third-party indexes; this tool scores the numbers
   you paste from free sources rather than pretending to have its own index.
+
+## License
+
+Released under the [MIT License](LICENSE) — free to use, modify, and
+distribute, including commercially, with attribution.

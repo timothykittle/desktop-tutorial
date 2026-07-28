@@ -1,11 +1,13 @@
 """Defensive website security audit + hardening-file generator.
 
-For site owners auditing their OWN site. Every check here is passive:
-response-header inspection, HTML analysis of pages we already crawled, a
-short socket/TLS handshake to read the certificate expiry, and a small,
-fixed list of benign "is this file public?" probes. No exploitation, no
-brute forcing, no authentication bypass - just best-practice checks and
-concrete, actionable fixes.
+Intended for a site you own or are explicitly authorized to test. Unlike the
+SEO checks (which only read public pages, fine for ANY site), the security
+module also sends a small set of benign "is this file public?" probes, so it
+is deliberately scoped to authorized targets. Every check here is still
+passive: response-header inspection, HTML analysis of pages we already
+crawled, a short socket/TLS handshake to read the certificate expiry, and
+that fixed probe list. No exploitation, no brute forcing, no authentication
+bypass - just best-practice checks and concrete, actionable fixes.
 
 Mirrors the structure of technical.py: one run_*_audit function that
 returns a SectionResult, plus a file generator that writes ready-to-upload

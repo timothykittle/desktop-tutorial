@@ -1,7 +1,17 @@
 """SEO Audit Pro - Windows GUI application (v2).
 
+Audits ANY website - a competitor, a client, or your own - by URL (SEO checks
+read only public pages), or a local folder / uploaded files for offline audit
+and repair. The business details entered in the assistant describe whichever
+site is loaded, so generated content is written for that site's business.
+
 Run:  python seo_audit_gui.py   (or double-click run_windows.bat)
 Build a standalone .exe:  python build_exe.py
+
+This file is the desktop front end only; all analysis lives in the `seo_audit`
+package (see its __init__ for a per-module map). The GUI's job is to collect a
+source, run the package's functions on a background thread, and show/save the
+results - it deliberately contains no SEO logic of its own.
 
 Layout:
   LEFT  - source (enter a URL, or drag-and-drop / browse a website folder or
@@ -43,6 +53,11 @@ from seo_audit.report import make_output_dir, save_reports
 # New v2 modules (built alongside this GUI)
 from seo_audit.localsite import load_local_site
 from seo_audit.diagnostics import run_diagnostics
+from seo_audit.verify import build_and_verify, render_split_html, split_results
+from seo_audit.backup import make_backup
+from seo_audit import gitsource
+from seo_audit import prompts as promptsmod
+from seo_audit import content as contentmod
 from seo_audit import repair as repairmod
 from seo_audit import locations as locmod
 
@@ -61,8 +76,22 @@ from seo_audit.assistant import (
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_PATH = os.path.join(APP_DIR, "settings.json")
 PROFILE_PATH = os.path.join(APP_DIR, "business_profile.json")
-AUDITS_DIR = os.path.join(APP_DIR, "audits")
-PACKAGE_DIR = os.path.join(APP_DIR, "site_package")
+
+# Output folders live under a configurable save root (default: the app folder).
+# set_save_root() re-points all three when the user picks a location.
+SAVE_ROOT = APP_DIR
+AUDITS_DIR = os.path.join(SAVE_ROOT, "audits")
+PACKAGE_DIR = os.path.join(SAVE_ROOT, "site_package")
+BACKUP_DIR = os.path.join(SAVE_ROOT, "backups")
+
+
+def set_save_root(root):
+    """Re-point audits/site_package/backups at a new base folder."""
+    global SAVE_ROOT, AUDITS_DIR, PACKAGE_DIR, BACKUP_DIR
+    SAVE_ROOT = root
+    AUDITS_DIR = os.path.join(root, "audits")
+    PACKAGE_DIR = os.path.join(root, "site_package")
+    BACKUP_DIR = os.path.join(root, "backups")
 
 # Palette
 NAVY = "#0b2545"
@@ -83,12 +112,14 @@ class SeoAuditApp:
         self.last_result = None
         self.last_error = ""
 
-        # Source state: either a URL, or a loaded local site
+        # Source state: a URL, a loaded local upload, or a cloned GitHub repo.
         self.source_mode = tk.StringVar(value="url")   # "url" | "local"
-        self.local_paths = []          # uploaded files/folder
-        self.local_pages = None        # loaded PageData dict
+        self.local_paths = []          # uploaded files/folder (in-memory session)
+        self.local_pages = None        # loaded PageData dict (discarded each session)
         self.local_broken = {}
         self.local_inventory = {}
+        self.source_root_paths = []    # original folder/files to back up
+        self.clone_dir = ""            # temp GitHub clone, cleaned on new session
 
         self.assistant = AssistantEngine(PROFILE_PATH)
         self._build_ui()
@@ -200,21 +231,52 @@ class SeoAuditApp:
                    command=self._pick_folder).pack(side="left")
         ttk.Button(btns, text="Choose Files…",
                    command=self._pick_files).pack(side="left", padx=4)
-        ttk.Label(box, text="Site's public base URL (optional, for local upload):").grid(
-            row=5, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        ttk.Button(btns, text="New session (clear)",
+                   command=self.act_new_session).pack(side="left", padx=4)
+
+        # GitHub source
+        gh = ttk.Frame(box)
+        gh.grid(row=5, column=0, columnspan=3, sticky="ew", pady=(6, 0))
+        gh.columnconfigure(1, weight=1)
+        ttk.Label(gh, text="Or load from GitHub:").grid(row=0, column=0, sticky="w")
+        self.gh_url_var = tk.StringVar()
+        ttk.Entry(gh, textvariable=self.gh_url_var).grid(row=0, column=1,
+                                                         sticky="ew", padx=4)
+        ttk.Button(gh, text="Clone & load",
+                   command=self.act_load_github).grid(row=0, column=2)
+        ttk.Label(gh, text="Token (private repos, optional):").grid(
+            row=1, column=0, sticky="w", pady=(2, 0))
+        self.gh_token_var = tk.StringVar()
+        ttk.Entry(gh, textvariable=self.gh_token_var, show="*").grid(
+            row=1, column=1, columnspan=2, sticky="ew", padx=4, pady=(2, 0))
+
+        ttk.Label(box, text="Site's public base URL (recommended for uploads):").grid(
+            row=6, column=0, columnspan=2, sticky="w", pady=(6, 0))
         self.base_url_var = tk.StringVar()
         ttk.Entry(box, textvariable=self.base_url_var, width=28).grid(
-            row=5, column=2, sticky="ew", padx=6, pady=(6, 0))
+            row=6, column=2, sticky="ew", padx=6, pady=(6, 0))
+
+        # Save location
+        save = ttk.Frame(box)
+        save.grid(row=7, column=0, columnspan=3, sticky="ew", pady=(6, 0))
+        save.columnconfigure(1, weight=1)
+        ttk.Label(save, text="Save results to:").grid(row=0, column=0, sticky="w")
+        self.save_root_var = tk.StringVar(value=SAVE_ROOT)
+        ttk.Entry(save, textvariable=self.save_root_var).grid(
+            row=0, column=1, sticky="ew", padx=4)
+        ttk.Button(save, text="Browse…",
+                   command=self._pick_save_root).grid(row=0, column=2)
+
         self.source_summary = tk.StringVar(value="")
         ttk.Label(box, textvariable=self.source_summary, foreground=ACCENT,
-                  font=("Segoe UI", 8)).grid(row=6, column=0, columnspan=3, sticky="w")
+                  font=("Segoe UI", 8)).grid(row=8, column=0, columnspan=3, sticky="w")
 
         # keywords
         ttk.Label(box, text="Target keywords (comma-separated):").grid(
-            row=7, column=0, sticky="w", pady=(6, 0))
+            row=9, column=0, sticky="w", pady=(6, 0))
         self.keywords_var = tk.StringVar()
         ttk.Entry(box, textvariable=self.keywords_var).grid(
-            row=7, column=1, columnspan=2, sticky="ew", padx=6, pady=(6, 0))
+            row=9, column=1, columnspan=2, sticky="ew", padx=6, pady=(6, 0))
 
     def _build_assistant(self, parent):
         box = ttk.LabelFrame(parent, text=" 2. AI Assistant (interviews you & "
@@ -242,17 +304,93 @@ class SeoAuditApp:
         # placed dynamically when an action is offered
 
     def _build_log(self, parent):
-        box = ttk.LabelFrame(parent, text=" Activity log ", padding=6)
-        box.grid(row=3, column=0, sticky="nsew", pady=(8, 0))
-        box.rowconfigure(0, weight=1)
-        box.columnconfigure(0, weight=1)
-        self.log_text = tk.Text(box, height=8, wrap="word", state="disabled",
+        self.nb = ttk.Notebook(parent)
+        self.nb.grid(row=3, column=0, sticky="nsew", pady=(8, 0))
+
+        # --- Tab 1: Results (Needs Repair / Repaired) ---
+        results = ttk.Frame(self.nb, padding=4)
+        self.nb.add(results, text="Results")
+        results.rowconfigure(1, weight=1)
+        results.rowconfigure(3, weight=1)
+        results.columnconfigure(0, weight=1)
+        self.results_summary = tk.StringVar(
+            value="Run an audit to list what needs repair; build & verify to "
+                  "move fixed items to Repaired.")
+        ttk.Label(results, textvariable=self.results_summary,
+                  font=("Segoe UI", 8), foreground="#5f6368").grid(
+            row=0, column=0, sticky="w", pady=(0, 2))
+
+        ttk.Label(results, text="⚠  NEEDS REPAIR",
+                  foreground="#d93025", font=("Segoe UI", 9, "bold")).grid(
+            row=0, column=0, sticky="e")
+        self.tree_needs = self._results_tree(results, 1)
+        ttk.Label(results, text="✓  REPAIRED (verified)",
+                  foreground="#188038", font=("Segoe UI", 9, "bold")).grid(
+            row=2, column=0, sticky="w", pady=(6, 0))
+        self.tree_repaired = self._results_tree(results, 3)
+
+        # --- Tab 2: Activity log ---
+        logf = ttk.Frame(self.nb)
+        self.nb.add(logf, text="Activity log")
+        logf.rowconfigure(0, weight=1)
+        logf.columnconfigure(0, weight=1)
+        self.log_text = tk.Text(logf, height=8, wrap="word", state="disabled",
                                 font=("Consolas", 9), background=NAVY,
                                 foreground="#d7e3f4")
         self.log_text.grid(row=0, column=0, sticky="nsew")
-        sc = ttk.Scrollbar(box, command=self.log_text.yview)
+        sc = ttk.Scrollbar(logf, command=self.log_text.yview)
         sc.grid(row=0, column=1, sticky="ns")
         self.log_text.configure(yscrollcommand=sc.set)
+
+    def _results_tree(self, parent, row):
+        frame = ttk.Frame(parent)
+        frame.grid(row=row, column=0, sticky="nsew")
+        frame.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+        cols = ("sev", "cat", "item", "page")
+        tree = ttk.Treeview(frame, columns=cols, show="headings", height=5)
+        for c, w, t in [("sev", 70, "Status"), ("cat", 130, "Category"),
+                        ("item", 320, "Item"), ("page", 160, "Page")]:
+            tree.heading(c, text=t)
+            tree.column(c, width=w, anchor="w")
+        tree.tag_configure("CRITICAL", foreground="#d93025")
+        tree.tag_configure("WARNING", foreground="#ea8600")
+        tree.tag_configure("NOTICE", foreground="#1a73e8")
+        tree.tag_configure("MANUAL", foreground="#8430ce")
+        tree.tag_configure("REPAIRED", foreground="#188038")
+        tree.grid(row=0, column=0, sticky="nsew")
+        vs = ttk.Scrollbar(frame, command=tree.yview)
+        vs.grid(row=0, column=1, sticky="ns")
+        tree.configure(yscrollcommand=vs.set)
+        return tree
+
+    def _populate_results(self, split):
+        """Fill the Needs Repair / Repaired trees from a verify split dict."""
+        self.tree_needs.delete(*self.tree_needs.get_children())
+        self.tree_repaired.delete(*self.tree_repaired.get_children())
+        for it in split.get("needs_repair", []):
+            manual = it.get("status") == "needs_repair_manual"
+            tag = "MANUAL" if manual else it["severity"]
+            label = "MANUAL" if manual else it["severity"]
+            self.tree_needs.insert("", "end", tags=(tag,), values=(
+                label, it["category"], it["message"][:120],
+                urlparse(it["url"]).path or it["url"]))
+        for it in split.get("repaired", []):
+            self.tree_repaired.insert("", "end", tags=("REPAIRED",), values=(
+                "FIXED ✓", it["category"], it["message"][:120],
+                urlparse(it["url"]).path or it["url"]))
+        s = split.get("summary", {})
+        verified = "verified against the rebuilt files" if s.get("verified") \
+            else "not yet verified"
+        self.results_summary.set(
+            f"{s.get('needs_repair', 0)} need repair, "
+            f"{s.get('repaired', 0)} repaired ({verified}).")
+        self.nb.select(0)  # show the Results tab
+
+    def _results_from_sections(self, sections):
+        """Turn a plain audit (no repair yet) into an all-needs-repair split."""
+        from seo_audit.verify import split_results
+        return split_results(sections, None)
 
     def _build_actions(self, parent):
         # Scrollable canvas so the button stack always fits
@@ -317,12 +455,23 @@ class SeoAuditApp:
         sq("✅  COMPLETE AUDIT (all checks)", self.act_complete_audit, big=True)
 
         header("Build & repair (for hosting)")
-        sq("\U0001F6E0️  Build repaired site package", self.act_build_package, big=True)
+        sq("\U0001F4BE  Back up originals now", self.act_backup)
+        sq("\U0001F6E0️  Build & verify repairs", self.act_build_package, big=True)
         sq("On-page fixes only", lambda: self.act_build_package(onpage_only=True))
+        sq("☁️  Save / push to GitHub", self.act_push_github)
         sq("\U0001F4CD  Build location pages", self.act_location_pages)
-        sq("❓  Generate FAQ page", self.act_faq)
-        sq("✍️  Generate blog plan", self.act_blog)
         sq("\U0001F4C8  Off-page action plan", self.act_offpage_plan)
+
+        header("AI visibility (AEO/GEO)")
+        sq("\U0001F50E  Prompt research", self.act_prompt_research)
+        sq("\U0001F4CA  Track AI visibility", self.act_track_visibility)
+
+        header("Content creation")
+        sq("❓  FAQ page", self.act_faq)
+        sq("✍️  Blog plan (12 topics)", self.act_blog)
+        sq("\U0001F4DD  Full blog-post draft", self.act_blog_post)
+        sq("\U0001F5C2️  Service landing pages", self.act_service_pages)
+        sq("\U0001F3F7️  Bulk meta descriptions", self.act_meta_descriptions)
 
         header("Guides")
         sq("Set up Google Business Profile", self.act_gbp_guide)
@@ -390,10 +539,15 @@ class SeoAuditApp:
         if fs:
             self._load_local(list(fs))
 
-    def _load_local(self, paths):
+    def _load_local(self, paths, from_github=False):
+        # A fresh load starts a fresh in-memory session: drop the prior site's
+        # parsed data before reading the new one.
+        if not from_github:
+            self._discard_session(keep_clone=False)
         self.source_mode.set("local")
         self._sync_source()
         self.local_paths = paths
+        self.source_root_paths = list(paths)   # originals we can back up
         base = self.base_url_var.get().strip()
         try:
             if len(paths) == 1 and os.path.isdir(paths[0]):
@@ -408,11 +562,67 @@ class SeoAuditApp:
             self.source_summary.set(
                 f"Loaded {n} HTML page(s), {inv.get('images', 0)} image(s), "
                 f"{inv.get('css', 0)} CSS, {inv.get('js', 0)} JS; "
-                f"{len(self.local_broken)} broken local link(s).")
-            self.log(f"Loaded local site: {n} pages from {paths[0]}")
+                f"{len(self.local_broken)} broken local link(s). "
+                f"(In memory only - discarded when you start a new session.)")
+            self.log(f"Loaded {'GitHub repo' if from_github else 'local site'}: "
+                     f"{n} pages from {paths[0]}")
         except Exception as exc:
             messagebox.showerror(APP_NAME, f"Could not load site: {exc}")
-            self.log(f"ERROR loading local site: {exc}")
+            self.log(f"ERROR loading site: {exc}")
+
+    def _discard_session(self, keep_clone=True):
+        """Drop the in-memory parsed site (kept only for the session)."""
+        self.local_pages = None
+        self.local_broken = {}
+        self.local_inventory = {}
+        self.local_paths = []
+        self.source_root_paths = []
+        if not keep_clone and self.clone_dir:
+            import shutil
+            shutil.rmtree(self.clone_dir, ignore_errors=True)
+            self.clone_dir = ""
+
+    def act_new_session(self):
+        self._discard_session(keep_clone=False)
+        try:
+            self.tree_needs.delete(*self.tree_needs.get_children())
+            self.tree_repaired.delete(*self.tree_repaired.get_children())
+        except Exception:
+            pass
+        self.source_summary.set("Session cleared - loaded site data discarded.")
+        self.log("New session: in-memory site data discarded.")
+
+    def _pick_save_root(self):
+        d = filedialog.askdirectory(title="Choose where to save results & backups")
+        if d:
+            self.save_root_var.set(d)
+            set_save_root(d)
+            self.log(f"Save location set to {d}")
+
+    def act_load_github(self):
+        url = self.gh_url_var.get().strip()
+        token = self.gh_token_var.get().strip()
+        if not url:
+            messagebox.showinfo(APP_NAME, "Paste a GitHub repo URL first.")
+            return
+        # apply save root before we clone under it
+        set_save_root(self.save_root_var.get().strip() or APP_DIR)
+
+        def job():
+            self._discard_session(keep_clone=False)
+            res = gitsource.clone_repo(url, token=token, log=self.log)
+            if not res["ok"]:
+                self.msg_queue.put(("status", "GitHub clone failed - see log."))
+                self.log("GitHub clone failed: " + res["error"])
+                messagebox.showerror(APP_NAME, "Could not load the repo:\n\n"
+                                     + res["error"])
+                return
+            self.clone_dir = res["dir"]
+            # Load on the main thread (Tk-touching) via a callback.
+            self.root.after(0, lambda: self._load_local([res["dir"]],
+                                                        from_github=True))
+            self.msg_queue.put(("status", "GitHub repo cloned and loaded."))
+        self._run_bg(job, f"Cloning {url} ...")
 
     def _current_url(self, required=True):
         url = self.url_var.get().strip()
@@ -522,6 +732,8 @@ class SeoAuditApp:
                     self._on_done(payload)
                 elif kind == "busy":
                     self._busy(payload)
+                elif kind == "results":
+                    self._populate_results(payload)
                 elif kind == "chat":
                     self._assistant_say(payload, "act")
         except queue.Empty:
@@ -568,6 +780,14 @@ class SeoAuditApp:
         if result and result.get("paths", {}).get("html"):
             self.last_result = result
             self.open_report_btn.configure(state="normal")
+            # Populate "Needs Repair" from the audit's issues (nothing verified
+            # as repaired until you run Build & verify repairs).
+            sections = result.get("sections")
+            if sections:
+                try:
+                    self._populate_results(split_results(sections, None))
+                except Exception:
+                    pass
             overall = result.get("overall")
             msg = f"Audit complete - overall score {overall}/100." if overall is not None \
                 else "Done."
@@ -585,6 +805,9 @@ class SeoAuditApp:
         url = self.url_var.get().strip()
         if url and not url.startswith(("http://", "https://")):
             url = "https://" + url
+        # Apply the save location (main thread) so the output globals are set
+        # before any worker uses them.
+        set_save_root(self.save_root_var.get().strip() or APP_DIR)
         return {
             "mode": self.source_mode.get(),
             "url": url,
@@ -598,6 +821,8 @@ class SeoAuditApp:
             "claude_key": self.claude_key_var.get().strip(),
             "business": self._business(),
             "offpage_manual": self._offpage_manual(),
+            "source_root_paths": list(self.source_root_paths),
+            "backup_dir": self._site_backup_dir(),
         }
 
     def _ctx_name(self, ctx):
@@ -862,6 +1087,93 @@ class SeoAuditApp:
     def act_sitemap(self):
         self._build_files_only("sitemap.xml")
 
+    # ---- backup + GitHub save ----
+    def _site_name(self):
+        base = self.base_url_var.get().strip() or self.url_var.get().strip()
+        if base:
+            host = urlparse(base if "//" in base else "//" + base).netloc
+            if host:
+                return host.replace(":", "_")
+        if self.source_root_paths:
+            return os.path.basename(str(self.source_root_paths[0]).rstrip("/\\")) \
+                or "site"
+        return "site"
+
+    def _site_backup_dir(self):
+        return os.path.join(BACKUP_DIR, self._site_name())
+
+    def _do_backup(self, ctx, quiet=False):
+        """Back up the loaded originals using paths captured in the ctx
+        snapshot (no Tk access - safe from a worker thread). Returns the
+        result dict or None."""
+        roots = ctx.get("source_root_paths") or []
+        if not roots:
+            if not quiet:
+                self.log("Backup skipped: no uploaded files (a live-URL audit "
+                         "has nothing local to back up).")
+            return None
+        try:
+            return make_backup(roots, ctx["backup_dir"], log=self.log)
+        except Exception as exc:
+            self.log(f"Backup error: {exc}")
+            return None
+
+    def act_backup(self):
+        ctx = self._snapshot()
+        if ctx["mode"] != "local" or not ctx["source_root_paths"]:
+            messagebox.showinfo(APP_NAME, "Upload a folder/files (or load a "
+                                          "GitHub repo) first - there's nothing "
+                                          "local to back up for a live URL.")
+            return
+
+        def job():
+            res = self._do_backup(ctx)
+            if res:
+                msg = (f"Backed up {res['files_copied']} file(s) to "
+                       f"{os.path.basename(res['folder'])}"
+                       + (f" ({len(res['skipped'])} unreadable skipped)"
+                          if res['skipped'] else ""))
+                self.msg_queue.put(("status", msg))
+                if messagebox.askyesno(APP_NAME, msg + f"\n\nLocation:\n"
+                                       f"{res['folder']}\n\nOpen the folder?"):
+                    self._open_folder(os.path.dirname(res['folder']))
+        self._run_bg(job, "Backing up originals...")
+
+    def act_push_github(self):
+        set_save_root(self.save_root_var.get().strip() or APP_DIR)
+        pkg = os.path.join(PACKAGE_DIR, "repaired-site")
+        if not os.path.isdir(pkg):
+            messagebox.showinfo(APP_NAME, "Build the repaired site package first "
+                                          "(Build & verify repairs), then push it.")
+            return
+        if not gitsource.git_available():
+            messagebox.showerror(APP_NAME, "Git isn't installed. Install Git for "
+                                 "Windows from https://git-scm.com/download/win.")
+            return
+        url = self._ask_text("Save to GitHub",
+                             "Target GitHub repo URL to push the repaired site to\n"
+                             "(a new branch is created - your main branch is untouched):")
+        if not url:
+            return
+        token = self.gh_token_var.get().strip()
+        if not messagebox.askyesno(APP_NAME, f"Push the repaired site package to:\n"
+                                   f"{url}\n\nThis creates a NEW branch and does not "
+                                   f"touch your existing branches. Continue?"):
+            return
+
+        def job():
+            self.log(f"Pushing repaired site to {url} ...")
+            res = gitsource.push_folder(pkg, url, token=token, log=self.log)
+            if res["ok"]:
+                self.msg_queue.put(("status", f"Pushed to branch {res['branch']}."))
+                messagebox.showinfo(APP_NAME, f"Pushed the repaired site to a new "
+                                    f"branch:\n\n{res['branch']}\n\nOpen a pull "
+                                    f"request on GitHub to review and merge it.")
+            else:
+                self.log("Push failed: " + res["error"])
+                messagebox.showerror(APP_NAME, "Push failed:\n\n" + res["error"])
+        self._run_bg(job, "Pushing to GitHub...")
+
     def _build_files_only(self, which):
         ctx = self._snapshot()
         if not self._have_source(ctx):
@@ -899,23 +1211,43 @@ class SeoAuditApp:
             if pages is None:
                 return
             base = ctx["url"] or ctx["base_url"] or ""
+            # Safety net: back up the untouched originals BEFORE repairing.
+            self._do_backup(ctx, quiet=True)
             out = os.path.join(PACKAGE_DIR, "repaired-site")
-            self.log("Building repaired site package...")
-            res = repairmod.repair_site(pages, out, ctx["business"],
-                                        keywords=ctx["keywords"], categories=cats,
-                                        base_url=base, log=self.log)
-            self.log(f"Repaired {res['pages_repaired']} page(s), "
-                     f"{res['changes']} change(s), {res['suggestions']} suggestion(s).")
-            self.msg_queue.put(("status", f"Site package saved to {out}"))
+            self.log("Building repaired site package (with verification)...")
+            # Audit -> repair -> re-audit the repaired files -> split results.
+            outcome = build_and_verify(pages, out, ctx["business"],
+                                       keywords=ctx["keywords"], categories=cats,
+                                       base_url=base, log=self.log)
+            res, split = outcome["result"], outcome["split"]
+            self.msg_queue.put(("results", split))
+            # Two-section HTML report (Needs Repair / Repaired)
+            status_html = os.path.join(res.get("output_dir", out),
+                                       "repair-status.html")
+            try:
+                render_split_html(base or "your site", split, status_html)
+            except Exception:
+                status_html = ""
+            self.last_result = {"paths": {"html": status_html},
+                                "output_dir": res.get("output_dir", out)} \
+                if status_html else self.last_result
+            s = split["summary"]
+            verified = "" if outcome["reaudited"] else \
+                "\n(Note: set a base URL to enable automatic verification.)"
+            self.msg_queue.put(("status", f"{s['repaired']} repaired, "
+                                          f"{s['needs_repair']} still need attention."))
             if messagebox.askyesno(
                     APP_NAME,
-                    f"Repaired site package built!\n\n"
-                    f"Pages repaired: {res['pages_repaired']}\n"
-                    f"Total fixes: {res['changes']}\n"
-                    f"Suggestions logged: {res['suggestions']}\n\n"
-                    f"Saved to:\n{out}\n\nOpen the folder?"):
-                self._open_folder(out)
-        self._run_bg(job, "Building repaired site package...")
+                    f"Repaired site package built and re-checked!\n\n"
+                    f"✓ Repaired (verified): {s['repaired']}\n"
+                    f"⚠ Still needs repair: {s['needs_repair']}\n\n"
+                    f"Saved to:\n{res.get('output_dir', out)}{verified}\n\n"
+                    f"Open the Needs Repair / Repaired report?"):
+                if status_html:
+                    webbrowser.open("file://" + os.path.abspath(status_html))
+                else:
+                    self._open_folder(res.get("output_dir", out))
+        self._run_bg(job, "Building & verifying repairs...")
 
     def act_location_pages(self, locations=None):
         ctx = self._snapshot()
@@ -981,6 +1313,167 @@ class SeoAuditApp:
         biz = self._business()
         self._write_generated("Outreach templates", "outreach-templates.md",
                               lambda: generate_outreach_templates(biz))
+
+    # ==================================================================
+    # ACTIONS - AI visibility (prompt research + tracking)
+    # ==================================================================
+    def _content_profile(self):
+        """Assistant profile + the base URL from the form, for the prompt /
+        content modules (read on the main thread)."""
+        p = dict(self.assistant.profile)
+        base = self.base_url_var.get().strip() or self.url_var.get().strip()
+        if base:
+            p["base_url"] = base
+        return p
+
+    def act_prompt_research(self):
+        prof = self._content_profile()
+        key = self.claude_key_var.get().strip()
+        set_save_root(self.save_root_var.get().strip() or APP_DIR)
+        if not prof.get("brand"):
+            messagebox.showinfo(APP_NAME, "Tell the AI assistant your business "
+                                          "name and services first (left panel).")
+            return
+
+        def job():
+            self.log("Researching AI-answer prompt targets...")
+            research = promptsmod.research_prompts(prof, api_key=key)
+            out = os.path.join(PACKAGE_DIR, "ai-visibility")
+            saved = promptsmod.save_prompts(prof, research, out)
+            self.log(f"Found {research['count']} prompts across "
+                     f"{len(research['clusters'])} intent clusters.")
+            self.msg_queue.put(("status", f"{research['count']} prompt targets "
+                                          f"saved to {out}"))
+            if messagebox.askyesno(APP_NAME, f"Generated {research['count']} "
+                                   f"AI-answer prompt targets"
+                                   + (" (AI-curated)" if key else " (templates; "
+                                      "add a Claude key for sharper phrasing)")
+                                   + f".\n\nSaved to:\n{out}\n\nOpen the list?"):
+                webbrowser.open("file://" + os.path.abspath(saved["md"]))
+        self._run_bg(job, "Researching prompts...")
+
+    def act_track_visibility(self):
+        prof = self._content_profile()
+        key = self.claude_key_var.get().strip()
+        set_save_root(self.save_root_var.get().strip() or APP_DIR)
+        out = os.path.join(PACKAGE_DIR, "ai-visibility")
+        json_path = os.path.join(out, "ai-prompt-targets.json")
+        if not prof.get("brand"):
+            messagebox.showinfo(APP_NAME, "Set your business name/services first.")
+            return
+        if not key and not messagebox.askyesno(
+                APP_NAME, "No Claude API key set, so tracking will open browser "
+                          "searches for each prompt for you to check manually.\n\n"
+                          "With a key, the app asks Claude (with live web search) "
+                          "and records whether you appear automatically.\n\n"
+                          "Continue in manual mode?"):
+            return
+
+        def job():
+            # Use saved prompts if present, else research now.
+            plist = []
+            if os.path.exists(json_path):
+                try:
+                    with open(json_path, encoding="utf-8") as fh:
+                        plist = json.load(fh).get("flat", [])
+                except (OSError, ValueError):
+                    plist = []
+            if not plist:
+                self.log("No saved prompts yet - researching first...")
+                plist = promptsmod.research_prompts(prof, api_key=key)["flat"]
+            self.log(f"Tracking AI visibility for {len(plist)} prompt(s) "
+                     f"({'AI + web search' if key else 'manual browser'})...")
+            res = promptsmod.track_visibility(
+                plist, prof, api_key=key,
+                history_dir=os.path.join(out, "tracking"), log=self.log,
+                max_prompts=25 if key else 60)
+            s = res["summary"]
+            # Manual mode: open the first few browser searches to get started.
+            if res["mode"] == "manual":
+                for row in res["rows"][:8]:
+                    if row.get("google"):
+                        webbrowser.open(row["google"])
+            delta = res.get("delta") or {}
+            dtxt = ""
+            if delta.get("visible") is not None:
+                v = delta["visible"]
+                dtxt = f"\nChange since last run: {'+' if v >= 0 else ''}{v} visible."
+            self.msg_queue.put(("status", f"AI visibility: {s['visible']}/{s['total']} "
+                                          f"prompts."))
+            messagebox.showinfo(
+                APP_NAME,
+                (f"AI-answer visibility for {prof.get('brand')}:\n\n"
+                 f"Cited (in answer sources): {s['cited']}\n"
+                 f"Mentioned (in answer text): {s['mentioned']}\n"
+                 f"Absent: {s['absent']}\n"
+                 + (f"Manual to check: {s['manual']}\n" if s.get('manual') else "")
+                 + dtxt +
+                 f"\n\nHistory saved to:\n{os.path.join(out, 'tracking')}")
+                if res["mode"] == "ai" else
+                (f"Opened browser searches for the first prompts. Check each for "
+                 f"{prof.get('brand')} / your domain and log the result.\n\n"
+                 f"All {len(res['rows'])} prompts + search links saved to:\n"
+                 f"{os.path.join(out, 'tracking')}\n\nAdd a Claude API key for "
+                 f"automatic tracking."))
+        self._run_bg(job, "Tracking AI visibility...")
+
+    # ==================================================================
+    # ACTIONS - expanded content creation
+    # ==================================================================
+    def act_blog_post(self):
+        prof = self._content_profile()
+        key = self.claude_key_var.get().strip()
+        topic = self._ask_text("Blog post", "Blog post topic (leave blank for a "
+                               "suggested one):") or ""
+        self._write_generated(
+            "Blog post draft",
+            f"blog-{(topic or 'post').lower().replace(' ', '-')[:40]}.md",
+            lambda: contentmod.generate_blog_post(prof, topic=topic, api_key=key))
+
+    def act_service_pages(self):
+        prof = self._content_profile()
+        key = self.claude_key_var.get().strip()
+        set_save_root(self.save_root_var.get().strip() or APP_DIR)
+        if not prof.get("services"):
+            messagebox.showinfo(APP_NAME, "Tell the assistant your services first.")
+            return
+
+        def job():
+            out = os.path.join(PACKAGE_DIR, "content", "service-pages")
+            self.log("Generating service landing pages...")
+            res = contentmod.generate_service_pages(prof, out, api_key=key,
+                                                    log=self.log)
+            self.msg_queue.put(("status", f"{res['count']} service pages -> {out}"))
+            if messagebox.askyesno(APP_NAME, f"Generated {res['count']} service "
+                                   f"landing page(s).\n\nSaved to:\n{out}\n\n"
+                                   f"Open the folder?"):
+                self._open_folder(out)
+        self._run_bg(job, "Generating service pages...")
+
+    def act_meta_descriptions(self):
+        ctx = self._snapshot()
+        prof = self._content_profile()
+        key = self.claude_key_var.get().strip()
+        if not self._have_source(ctx):
+            return
+
+        def job():
+            pages, broken, _ = self._get_pages(ctx)
+            if pages is None:
+                return
+            page_list = [(u, (p.soup.title.get_text(strip=True)
+                              if p.soup and p.soup.title else u))
+                         for u, p in pages.items() if p.ok]
+            self.log(f"Writing meta descriptions for {len(page_list)} page(s)...")
+            rows = contentmod.generate_meta_descriptions(page_list, prof,
+                                                        api_key=key, log=self.log)
+            out = os.path.join(PACKAGE_DIR, "content")
+            path = contentmod.save_meta_descriptions(rows, out)
+            self.msg_queue.put(("status", f"Meta descriptions -> {path}"))
+            if messagebox.askyesno(APP_NAME, f"Wrote {len(rows)} meta "
+                                   f"description(s) to:\n{path}\n\nOpen it?"):
+                webbrowser.open("file://" + os.path.abspath(path))
+        self._run_bg(job, "Writing meta descriptions...")
 
     def _write_generated(self, label, filename, producer):
         def job():
@@ -1055,6 +1548,11 @@ class SeoAuditApp:
             self.max_pages_var.set(s.get("max_pages", 40))
             self.subdomains_var.set(s.get("subdomains", False))
             self.sitemap_var.set(s.get("sitemap", True))
+            self.gh_url_var.set(s.get("github_url", ""))
+            root = s.get("save_root", "")
+            if root:
+                self.save_root_var.set(root)
+                set_save_root(root)
         except (OSError, json.JSONDecodeError):
             pass
 
@@ -1070,6 +1568,11 @@ class SeoAuditApp:
                     "max_pages": self.max_pages_var.get(),
                     "subdomains": self.subdomains_var.get(),
                     "sitemap": self.sitemap_var.get(),
+                    "github_url": self.gh_url_var.get(),
+                    "save_root": self.save_root_var.get(),
+                    # NB: GitHub token and API keys' secrecy - token is never
+                    # persisted; API keys are (user convenience) - keep
+                    # settings.json out of shared/committed folders.
                 }, fh, indent=2)
         except OSError:
             pass
@@ -1077,6 +1580,8 @@ class SeoAuditApp:
     def on_close(self):
         self._save_settings()
         self.stop_requested = True
+        # Discard the in-memory session and any temp GitHub clone.
+        self._discard_session(keep_clone=False)
         self.root.destroy()
 
 

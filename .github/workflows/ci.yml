@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    name: Compile & smoke test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Byte-compile all source
+        run: python -m compileall -q seo_audit seo_audit_gui.py run_audit_cli.py build_exe.py tests
+
+      - name: Offline smoke test
+        run: python tests/smoke_test.py
+
+      - name: Validate wiki links resolve
+        run: |
+          python - <<'PY'
+          import glob, os, re, sys
+          pages = {os.path.basename(f)[:-3] for f in glob.glob("wiki/*.md")}
+          missing = []
+          for f in glob.glob("wiki/*.md"):
+              for m in re.findall(r"\[\[([^\]]+)\]\]", open(f, encoding="utf-8").read()):
+                  page = m.split("|")[-1].strip() if "|" in m else m.strip()
+                  if page.replace(" ", "-") not in pages:
+                      missing.append((os.path.basename(f), page))
+          if missing:
+              print("Unresolved wiki links:", missing); sys.exit(1)
+          print(f"All wiki links resolve ({len(pages)} pages).")
+          PY
