@@ -46,6 +46,8 @@ from seo_audit.diagnostics import run_diagnostics
 from seo_audit.verify import build_and_verify, render_split_html, split_results
 from seo_audit.backup import make_backup
 from seo_audit import gitsource
+from seo_audit import prompts as promptsmod
+from seo_audit import content as contentmod
 from seo_audit import repair as repairmod
 from seo_audit import locations as locmod
 
@@ -448,9 +450,18 @@ class SeoAuditApp:
         sq("On-page fixes only", lambda: self.act_build_package(onpage_only=True))
         sq("☁️  Save / push to GitHub", self.act_push_github)
         sq("\U0001F4CD  Build location pages", self.act_location_pages)
-        sq("❓  Generate FAQ page", self.act_faq)
-        sq("✍️  Generate blog plan", self.act_blog)
         sq("\U0001F4C8  Off-page action plan", self.act_offpage_plan)
+
+        header("AI visibility (AEO/GEO)")
+        sq("\U0001F50E  Prompt research", self.act_prompt_research)
+        sq("\U0001F4CA  Track AI visibility", self.act_track_visibility)
+
+        header("Content creation")
+        sq("❓  FAQ page", self.act_faq)
+        sq("✍️  Blog plan (12 topics)", self.act_blog)
+        sq("\U0001F4DD  Full blog-post draft", self.act_blog_post)
+        sq("\U0001F5C2️  Service landing pages", self.act_service_pages)
+        sq("\U0001F3F7️  Bulk meta descriptions", self.act_meta_descriptions)
 
         header("Guides")
         sq("Set up Google Business Profile", self.act_gbp_guide)
@@ -1292,6 +1303,167 @@ class SeoAuditApp:
         biz = self._business()
         self._write_generated("Outreach templates", "outreach-templates.md",
                               lambda: generate_outreach_templates(biz))
+
+    # ==================================================================
+    # ACTIONS - AI visibility (prompt research + tracking)
+    # ==================================================================
+    def _content_profile(self):
+        """Assistant profile + the base URL from the form, for the prompt /
+        content modules (read on the main thread)."""
+        p = dict(self.assistant.profile)
+        base = self.base_url_var.get().strip() or self.url_var.get().strip()
+        if base:
+            p["base_url"] = base
+        return p
+
+    def act_prompt_research(self):
+        prof = self._content_profile()
+        key = self.claude_key_var.get().strip()
+        set_save_root(self.save_root_var.get().strip() or APP_DIR)
+        if not prof.get("brand"):
+            messagebox.showinfo(APP_NAME, "Tell the AI assistant your business "
+                                          "name and services first (left panel).")
+            return
+
+        def job():
+            self.log("Researching AI-answer prompt targets...")
+            research = promptsmod.research_prompts(prof, api_key=key)
+            out = os.path.join(PACKAGE_DIR, "ai-visibility")
+            saved = promptsmod.save_prompts(prof, research, out)
+            self.log(f"Found {research['count']} prompts across "
+                     f"{len(research['clusters'])} intent clusters.")
+            self.msg_queue.put(("status", f"{research['count']} prompt targets "
+                                          f"saved to {out}"))
+            if messagebox.askyesno(APP_NAME, f"Generated {research['count']} "
+                                   f"AI-answer prompt targets"
+                                   + (" (AI-curated)" if key else " (templates; "
+                                      "add a Claude key for sharper phrasing)")
+                                   + f".\n\nSaved to:\n{out}\n\nOpen the list?"):
+                webbrowser.open("file://" + os.path.abspath(saved["md"]))
+        self._run_bg(job, "Researching prompts...")
+
+    def act_track_visibility(self):
+        prof = self._content_profile()
+        key = self.claude_key_var.get().strip()
+        set_save_root(self.save_root_var.get().strip() or APP_DIR)
+        out = os.path.join(PACKAGE_DIR, "ai-visibility")
+        json_path = os.path.join(out, "ai-prompt-targets.json")
+        if not prof.get("brand"):
+            messagebox.showinfo(APP_NAME, "Set your business name/services first.")
+            return
+        if not key and not messagebox.askyesno(
+                APP_NAME, "No Claude API key set, so tracking will open browser "
+                          "searches for each prompt for you to check manually.\n\n"
+                          "With a key, the app asks Claude (with live web search) "
+                          "and records whether you appear automatically.\n\n"
+                          "Continue in manual mode?"):
+            return
+
+        def job():
+            # Use saved prompts if present, else research now.
+            plist = []
+            if os.path.exists(json_path):
+                try:
+                    with open(json_path, encoding="utf-8") as fh:
+                        plist = json.load(fh).get("flat", [])
+                except (OSError, ValueError):
+                    plist = []
+            if not plist:
+                self.log("No saved prompts yet - researching first...")
+                plist = promptsmod.research_prompts(prof, api_key=key)["flat"]
+            self.log(f"Tracking AI visibility for {len(plist)} prompt(s) "
+                     f"({'AI + web search' if key else 'manual browser'})...")
+            res = promptsmod.track_visibility(
+                plist, prof, api_key=key,
+                history_dir=os.path.join(out, "tracking"), log=self.log,
+                max_prompts=25 if key else 60)
+            s = res["summary"]
+            # Manual mode: open the first few browser searches to get started.
+            if res["mode"] == "manual":
+                for row in res["rows"][:8]:
+                    if row.get("google"):
+                        webbrowser.open(row["google"])
+            delta = res.get("delta") or {}
+            dtxt = ""
+            if delta.get("visible") is not None:
+                v = delta["visible"]
+                dtxt = f"\nChange since last run: {'+' if v >= 0 else ''}{v} visible."
+            self.msg_queue.put(("status", f"AI visibility: {s['visible']}/{s['total']} "
+                                          f"prompts."))
+            messagebox.showinfo(
+                APP_NAME,
+                (f"AI-answer visibility for {prof.get('brand')}:\n\n"
+                 f"Cited (in answer sources): {s['cited']}\n"
+                 f"Mentioned (in answer text): {s['mentioned']}\n"
+                 f"Absent: {s['absent']}\n"
+                 + (f"Manual to check: {s['manual']}\n" if s.get('manual') else "")
+                 + dtxt +
+                 f"\n\nHistory saved to:\n{os.path.join(out, 'tracking')}")
+                if res["mode"] == "ai" else
+                (f"Opened browser searches for the first prompts. Check each for "
+                 f"{prof.get('brand')} / your domain and log the result.\n\n"
+                 f"All {len(res['rows'])} prompts + search links saved to:\n"
+                 f"{os.path.join(out, 'tracking')}\n\nAdd a Claude API key for "
+                 f"automatic tracking."))
+        self._run_bg(job, "Tracking AI visibility...")
+
+    # ==================================================================
+    # ACTIONS - expanded content creation
+    # ==================================================================
+    def act_blog_post(self):
+        prof = self._content_profile()
+        key = self.claude_key_var.get().strip()
+        topic = self._ask_text("Blog post", "Blog post topic (leave blank for a "
+                               "suggested one):") or ""
+        self._write_generated(
+            "Blog post draft",
+            f"blog-{(topic or 'post').lower().replace(' ', '-')[:40]}.md",
+            lambda: contentmod.generate_blog_post(prof, topic=topic, api_key=key))
+
+    def act_service_pages(self):
+        prof = self._content_profile()
+        key = self.claude_key_var.get().strip()
+        set_save_root(self.save_root_var.get().strip() or APP_DIR)
+        if not prof.get("services"):
+            messagebox.showinfo(APP_NAME, "Tell the assistant your services first.")
+            return
+
+        def job():
+            out = os.path.join(PACKAGE_DIR, "content", "service-pages")
+            self.log("Generating service landing pages...")
+            res = contentmod.generate_service_pages(prof, out, api_key=key,
+                                                    log=self.log)
+            self.msg_queue.put(("status", f"{res['count']} service pages -> {out}"))
+            if messagebox.askyesno(APP_NAME, f"Generated {res['count']} service "
+                                   f"landing page(s).\n\nSaved to:\n{out}\n\n"
+                                   f"Open the folder?"):
+                self._open_folder(out)
+        self._run_bg(job, "Generating service pages...")
+
+    def act_meta_descriptions(self):
+        ctx = self._snapshot()
+        prof = self._content_profile()
+        key = self.claude_key_var.get().strip()
+        if not self._have_source(ctx):
+            return
+
+        def job():
+            pages, broken, _ = self._get_pages(ctx)
+            if pages is None:
+                return
+            page_list = [(u, (p.soup.title.get_text(strip=True)
+                              if p.soup and p.soup.title else u))
+                         for u, p in pages.items() if p.ok]
+            self.log(f"Writing meta descriptions for {len(page_list)} page(s)...")
+            rows = contentmod.generate_meta_descriptions(page_list, prof,
+                                                        api_key=key, log=self.log)
+            out = os.path.join(PACKAGE_DIR, "content")
+            path = contentmod.save_meta_descriptions(rows, out)
+            self.msg_queue.put(("status", f"Meta descriptions -> {path}"))
+            if messagebox.askyesno(APP_NAME, f"Wrote {len(rows)} meta "
+                                   f"description(s) to:\n{path}\n\nOpen it?"):
+                webbrowser.open("file://" + os.path.abspath(path))
+        self._run_bg(job, "Writing meta descriptions...")
 
     def _write_generated(self, label, filename, producer):
         def job():

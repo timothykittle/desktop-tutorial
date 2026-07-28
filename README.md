@@ -124,6 +124,31 @@ pull request, review the changes, and merge when you're happy. Requires Git
 installed and (for private repos) a personal-access token. The token is used
 only for that push and is never saved to disk or shown in logs.
 
+## AI visibility (AEO/GEO): prompt research & tracking
+
+- **Prompt research** — generates the real questions people ask AI assistants
+  (ChatGPT, Perplexity, Google AI Overviews) that your business should be the
+  answer to, built from your services × areas × buyer intent and grouped into
+  clusters (informational, commercial/near-me, local/urgent, comparison,
+  brand). Saved as `.md`, `.csv`, and `.json`. Templated offline; sharper
+  phrasing with a Claude API key.
+- **Track AI visibility** — for that prompt list, checks whether your brand /
+  domain appears in AI answers. With a Claude API key it runs each prompt
+  through Claude with **live web search** and records *cited* (in the answer's
+  sources), *mentioned* (in the answer text), or *absent*. Without a key it
+  opens browser searches for you to check and log. Every run is **timestamped**
+  (`tracking-history.csv` + per-run JSON) and reports the change since last
+  time, so you can watch your AI visibility climb.
+
+## Content creation
+
+Beyond FAQ pages and the 12-topic blog plan, the **Content creation** section
+generates: **full blog-post drafts** (700–1000 words, snippet-friendly intro,
+FAQ, CTA), **service landing pages** (one polished HTML page per service with
+schema-ready structure and NAP), and **bulk meta descriptions** (a ≤155-char
+description for every crawled/uploaded page, exported to CSV). All work offline
+from templates and use Claude for the actual writing when a key is set.
+
 ## Security audit & hardening (for your own site)
 
 Click **Security audit** for a defensive check of the site you're auditing:
