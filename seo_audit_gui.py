@@ -1,7 +1,17 @@
 """SEO Audit Pro - Windows GUI application (v2).
 
+Audits ANY website - a competitor, a client, or your own - by URL (SEO checks
+read only public pages), or a local folder / uploaded files for offline audit
+and repair. The business details entered in the assistant describe whichever
+site is loaded, so generated content is written for that site's business.
+
 Run:  python seo_audit_gui.py   (or double-click run_windows.bat)
 Build a standalone .exe:  python build_exe.py
+
+This file is the desktop front end only; all analysis lives in the `seo_audit`
+package (see its __init__ for a per-module map). The GUI's job is to collect a
+source, run the package's functions on a background thread, and show/save the
+results - it deliberately contains no SEO logic of its own.
 
 Layout:
   LEFT  - source (enter a URL, or drag-and-drop / browse a website folder or

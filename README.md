@@ -149,7 +149,7 @@ schema-ready structure and NAP), and **bulk meta descriptions** (a ≤155-char
 description for every crawled/uploaded page, exported to CSV). All work offline
 from templates and use Claude for the actual writing when a key is set.
 
-## Security audit & hardening (for your own site)
+## Security audit & hardening (site you own or are authorized to test)
 
 Click **Security audit** for a defensive check of the site you're auditing:
 HTTPS + HTTP→HTTPS redirect, TLS certificate expiry, missing security headers
